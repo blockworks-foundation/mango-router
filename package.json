@@ -1,0 +1,11 @@
+{
+  "name": "mango-router",
+  "version": "1.0.0",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^4.9.4"
+  },
+  "dependencies": {
+    "ts-node": "^10.9.1"
+  }
+}
