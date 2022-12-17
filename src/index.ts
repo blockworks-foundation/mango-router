@@ -1,4 +1,5 @@
 import {
+  Group,
   MangoClient,
   MANGO_V4_ID,
   toNative,
@@ -8,7 +9,9 @@ import { Percentage } from "@orca-so/common-sdk";
 import {
   buildWhirlpoolClient,
   ORCA_WHIRLPOOL_PROGRAM_ID,
+  PoolUtil,
   swapQuoteByInputToken,
+  swapQuoteByOutputToken,
   Whirlpool,
   WhirlpoolClient,
   WhirlpoolContext,
@@ -18,6 +21,7 @@ import {
   Cluster,
   clusterApiUrl,
   PublicKey,
+  Signer,
   TransactionInstruction,
 } from "@solana/web3.js";
 
@@ -50,6 +54,8 @@ interface Route {
   outputMint: PublicKey;
   provider: RouteProvider;
   details: WhirpoolDetails;
+  instructions?: TransactionInstruction[];
+  signers?: Signer[];
 }
 
 class Router {
@@ -57,6 +63,7 @@ class Router {
   whirpoolClient: WhirlpoolClient;
   whirpoolRefresh?: ReturnType<typeof setInterval>;
   routes: Map<string, Route[]>;
+  mangoGroup?: Group;
 
   constructor(mangoClient: MangoClient, whirpoolClient: WhirlpoolClient) {
     this.mangoClient = mangoClient;
@@ -69,24 +76,71 @@ class Router {
     this.whirpoolRefresh = setInterval(this.refreshWhirpools, 2 * MINUTES);
   }
 
+  getRoutes(mintA: string, mintB: string): Route[] {
+    const key = `FROM:${mintA} TO:${mintB}`;
+    return this.routes.get(key) || [];
+  }
+
   pickRoute(
     mintA: string,
     mintB: string,
     usdAmount: number
   ): Route | undefined {
-    const key = `FROM:${mintA} TO:${mintB}`;
-    const routes = this.routes.get(key)!;
-
-    return routes
+    return this.getRoutes(mintA, mintB)
       .filter((r) => r.referenceUsdAmount >= usdAmount)
       .sort((a, b) => a.slippage - b.slippage)
       .find((_) => true);
   }
 
-  async refreshWhirpools(): Promise<void> {
-    const group = await this.mangoClient.getGroup(groupPk);
+  async prepareRoute(
+    mintA: string,
+    mintB: string,
+    maxA: number,
+    minB: number,
+    wallet: string
+  ): Promise<Route | undefined> {
+    if (!this.mangoGroup) return;
 
-    let allMintPks = Array.from(group.banksMapByMint.keys()).map(
+    const bankA = this.mangoGroup.getFirstBankByMint(new PublicKey(mintA));
+    const bankB = this.mangoGroup.getFirstBankByMint(new PublicKey(mintB));
+    // assume input includes slippage and output is target
+    const usdAmount = maxA * bankA.uiPrice;
+    const slippage = Percentage.fromFraction(
+      usdAmount - minB * bankA.uiPrice,
+      usdAmount
+    );
+
+    const route = this.pickRoute(mintA, mintB, usdAmount);
+
+    if (!route) return;
+
+    const pool = await this.whirpoolClient.getPool(
+      route.details.whirpool,
+      true
+    );
+    const quote = await swapQuoteByOutputToken(
+      pool,
+      mintB,
+      toNative(minB, bankB.mintDecimals),
+      slippage,
+      ORCA_WHIRLPOOL_PROGRAM_ID,
+      this.whirpoolClient.getFetcher(),
+      false
+    );
+
+    const tx = await pool.swap(quote, new PublicKey(wallet));
+    const ix = tx.compressIx(true);
+
+    route.instructions = ix.instructions;
+    route.signers = ix.signers;
+
+    return route;
+  }
+
+  async refreshWhirpools(): Promise<void> {
+    this.mangoGroup = await this.mangoClient.getGroup(groupPk);
+
+    let allMintPks = Array.from(this.mangoGroup.banksMapByMint.keys()).map(
       (p) => new PublicKey(p)
     );
 
@@ -113,8 +167,8 @@ class Router {
         const key = `FROM:${mintA.toString()} TO:${mintB.toString()}`;
         console.log("SWAP", key, relevantPools.length, "ROUTES FOUND");
 
-        const bankA = group.getFirstBankByMint(mintA);
-        const bankB = group.getFirstBankByMint(mintB);
+        const bankA = this.mangoGroup.getFirstBankByMint(mintA);
+        const bankB = this.mangoGroup.getFirstBankByMint(mintB);
 
         let routesForKey: Route[] = [];
         for (let referenceUsdAmount of [100, 300, 1000, 3000, 10000, 30000]) {
@@ -197,11 +251,13 @@ async function main() {
   await router.refreshWhirpools();
 
   console.log(
-    "pick",
-    router.pickRoute(
+    "prepare min 8SOL for max 100 USDC",
+    await router.prepareRoute(
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "So11111111111111111111111111111111111111112",
-      "MangoCzJ36AjZyKwVj3VnYU4GTonjfVEnJmvvWaxLac",
-      100
+      100,
+      8,
+      "Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT"
     )
   );
 }
