@@ -1,264 +1,347 @@
 import {
-  Group,
+  getAssociatedTokenAddress,
   MangoClient,
   MANGO_V4_ID,
-  toNative,
-  toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
-import { Percentage } from "@orca-so/common-sdk";
+import { Percentage, ZERO } from "@orca-so/common-sdk";
 import {
   buildWhirlpoolClient,
   ORCA_WHIRLPOOL_PROGRAM_ID,
-  PoolUtil,
+  SwapQuote,
   swapQuoteByInputToken,
   swapQuoteByOutputToken,
   Whirlpool,
   WhirlpoolClient,
   WhirlpoolContext,
 } from "@orca-so/whirlpools-sdk";
-import { AnchorProvider, BN } from "@project-serum/anchor";
+import {
+  AnchorProvider,
+  BN,
+  BorshAccountsCoder,
+  Idl,
+} from "@project-serum/anchor";
 import {
   Cluster,
   clusterApiUrl,
   PublicKey,
-  Signer,
   TransactionInstruction,
 } from "@solana/web3.js";
 
-const { CLUSTER, RPC_URL, GROUP_PK, MAX_SLIPPAGE_BPS } = process.env;
+const { CLUSTER, RPC_URL } = process.env;
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
-const groupPk = new PublicKey(
-  GROUP_PK || "78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX"
-);
-const slippageLimit = Percentage.fromFraction(
-  Number(MAX_SLIPPAGE_BPS || 250),
-  10000
-);
 
-const MINUTES = 60 * 1000;
-
-enum RouteProvider {
-  Whirpool = "whirpool",
+enum SwapMode {
+  ExactIn = "ExactIn",
+  ExactOut = "ExactOut",
 }
 
-interface WhirpoolDetails {
-  whirpool: PublicKey;
+interface SwapResult {
+  instructions: (wallet: PublicKey) => Promise<TransactionInstruction[]>;
+  maxAmtIn: BN;
+  minAmtOut: BN;
+  ok: boolean;
 }
 
-interface Route {
-  referenceUsdAmount: number;
-  slippage: number;
+function mergeSwapResults(...hops: SwapResult[]) {
+  const firstHop = hops[0];
+  const lastHop = hops[hops.length - 1];
+  return {
+    instructions: async (wallet: PublicKey) =>
+      await (await Promise.all(hops.map((h) => h.instructions(wallet)))).flat(),
+    maxAmtIn: firstHop.maxAmtIn,
+    minAmtOut: lastHop.minAmtOut,
+    ok: hops.reduce((p, c) => p && c.ok, true),
+  };
+}
+
+interface Edge {
+  label: string;
   inputMint: PublicKey;
   outputMint: PublicKey;
-  provider: RouteProvider;
-  details: WhirpoolDetails;
-  instructions?: TransactionInstruction[];
-  signers?: Signer[];
+  swap: (
+    amount: BN,
+    otherAmountThreshold: BN,
+    mode: SwapMode,
+    slippage: number
+  ) => Promise<SwapResult>;
+}
+
+class WhirlpoolEdge implements Edge {
+  constructor(
+    public label: string,
+    public inputMint: PublicKey,
+    public outputMint: PublicKey,
+    public poolPk: PublicKey,
+    public client: WhirlpoolClient
+  ) {}
+
+  static pairFromPool(pool: Whirlpool, client: WhirlpoolClient): Edge[] {
+    const fwd = new WhirlpoolEdge(
+      "Whirlpool",
+      pool.getTokenAInfo().mint,
+      pool.getTokenBInfo().mint,
+      pool.getAddress(),
+      client
+    );
+    const bwd = new WhirlpoolEdge(
+      "Whirpool",
+      pool.getTokenBInfo().mint,
+      pool.getTokenAInfo().mint,
+      pool.getAddress(),
+      client
+    );
+
+    return [fwd, bwd];
+  }
+
+  async swap(
+    amount: BN,
+    otherAmountThreshold: BN,
+    mode: SwapMode,
+    slippage: number
+  ): Promise<SwapResult> {
+    try {
+      const fetcher = this.client.getFetcher();
+      const pool = await this.client.getPool(this.poolPk);
+      const programId = this.client.getContext().program.programId;
+      const slippageLimit = Percentage.fromFraction(slippage * 1e8, 1e8);
+      let quote: SwapQuote | undefined;
+      let ok: boolean = false;
+
+      if (mode === SwapMode.ExactIn) {
+        quote = await swapQuoteByInputToken(
+          pool,
+          this.inputMint,
+          amount,
+          slippageLimit,
+          programId,
+          fetcher,
+          false
+        );
+        ok = quote.estimatedAmountOut.gt(otherAmountThreshold);
+      } else {
+        quote = await swapQuoteByOutputToken(
+          pool,
+          this.outputMint,
+          amount,
+          slippageLimit,
+          programId,
+          fetcher,
+          false
+        );
+        ok = quote.estimatedAmountIn.lt(otherAmountThreshold);
+      }
+
+      let instructions = async (wallet: PublicKey) => {
+        if (!ok) {
+          return [];
+        }
+        const tokenIn = await getAssociatedTokenAddress(this.inputMint, wallet);
+        const tokenOut = await getAssociatedTokenAddress(
+          this.outputMint,
+          wallet
+        );
+        return [await pool.getSwapIx(quote!, tokenIn, tokenOut, wallet)];
+      };
+      return {
+        ok,
+        instructions,
+        maxAmtIn: quote.estimatedAmountIn,
+        minAmtOut: quote.estimatedAmountOut,
+      };
+    } catch (e) {
+      console.trace("could not swap", this);
+      return {
+        ok: false,
+        maxAmtIn: amount,
+        minAmtOut: otherAmountThreshold,
+        instructions: async () => [],
+      };
+    }
+  }
 }
 
 class Router {
-  mangoClient: MangoClient;
-  whirpoolClient: WhirlpoolClient;
-  whirpoolRefresh?: ReturnType<typeof setInterval>;
-  routes: Map<string, Route[]>;
-  mangoGroup?: Group;
+  whirlpoolClient: WhirlpoolClient;
+  routes: Map<string, Map<string, Edge[]>>;
+
+  whirlpoolSub?: number;
 
   constructor(mangoClient: MangoClient, whirpoolClient: WhirlpoolClient) {
-    this.mangoClient = mangoClient;
-    this.whirpoolClient = whirpoolClient;
+    this.whirlpoolClient = whirpoolClient;
     this.routes = new Map();
   }
 
   async start(): Promise<void> {
-    await this.refreshWhirpools();
-    this.whirpoolRefresh = setInterval(this.refreshWhirpools, 2 * MINUTES);
+    await this.indexWhirpools();
+
+    // setup a websocket connection to refresh all whirpool program accounts
+    const idl = this.whirlpoolClient.getContext().program.idl;
+    const whirlpoolCoder = new BorshAccountsCoder(idl as Idl);
+    this.whirlpoolSub = this.whirlpoolClient
+      .getContext()
+      .connection.onProgramAccountChange(
+        ORCA_WHIRLPOOL_PROGRAM_ID,
+        (p) => {
+          const key = p.accountId.toBase58();
+          const accountData = p.accountInfo.data;
+          const value = whirlpoolCoder.decodeAny(accountData);
+          this.whirlpoolClient.getFetcher()["_cache"][key] = {
+            entity: undefined,
+            value,
+          };
+        },
+        "processed"
+      );
   }
 
-  getRoutes(mintA: string, mintB: string): Route[] {
-    const key = `FROM:${mintA} TO:${mintB}`;
-    return this.routes.get(key) || [];
+  async stop(): Promise<void> {
+    if (this.whirlpoolSub) {
+      await this.whirlpoolClient
+        .getContext()
+        .connection.removeProgramAccountChangeListener(this.whirlpoolSub);
+    }
   }
 
-  pickRoute(
-    mintA: string,
-    mintB: string,
-    usdAmount: number
-  ): Route | undefined {
-    return this.getRoutes(mintA, mintB)
-      .filter((r) => r.referenceUsdAmount >= usdAmount)
-      .sort((a, b) => a.slippage - b.slippage)
-      .find((_) => true);
+  addEdge(edge: Edge) {
+    const mintA = edge.inputMint.toString();
+    const mintB = edge.outputMint.toString();
+    if (!this.routes.has(mintA)) {
+      this.routes.set(mintA, new Map());
+    }
+
+    let routesFromA = this.routes.get(mintA)!;
+    if (!routesFromA.has(mintB)) {
+      routesFromA.set(mintB, []);
+    }
+
+    let routesFromAToB = routesFromA.get(mintB)!;
+    routesFromAToB.push(edge);
   }
 
-  async prepareRoute(
-    mintA: string,
-    mintB: string,
-    maxA: number,
-    minB: number,
-    wallet: string
-  ): Promise<Route | undefined> {
-    if (!this.mangoGroup) return;
-
-    const bankA = this.mangoGroup.getFirstBankByMint(new PublicKey(mintA));
-    const bankB = this.mangoGroup.getFirstBankByMint(new PublicKey(mintB));
-    // assume input includes slippage and output is target
-    const usdAmount = maxA * bankA.uiPrice;
-    const slippage = Percentage.fromFraction(
-      usdAmount - minB * bankA.uiPrice,
-      usdAmount
-    );
-
-    const route = this.pickRoute(mintA, mintB, usdAmount);
-
-    if (!route) return;
-
-    const pool = await this.whirpoolClient.getPool(
-      route.details.whirpool,
-      true
-    );
-    const quote = await swapQuoteByOutputToken(
-      pool,
-      mintB,
-      toNative(minB, bankB.mintDecimals),
-      slippage,
-      ORCA_WHIRLPOOL_PROGRAM_ID,
-      this.whirpoolClient.getFetcher(),
-      false
-    );
-
-    const tx = await pool.swap(quote, new PublicKey(wallet));
-    const ix = tx.compressIx(true);
-
-    route.instructions = ix.instructions;
-    route.signers = ix.signers;
-
-    return route;
+  addEdges(edges: Edge[]) {
+    for (const edge of edges) {
+      this.addEdge(edge);
+    }
   }
 
-  async refreshWhirpools(): Promise<void> {
-    this.mangoGroup = await this.mangoClient.getGroup(groupPk);
-
-    let allMintPks = Array.from(this.mangoGroup.banksMapByMint.keys()).map(
-      (p) => new PublicKey(p)
-    );
-
+  async indexWhirpools(): Promise<void> {
     let poolsPks = (
-      await this.whirpoolClient.getContext().program.account.whirlpool.all()
+      await this.whirlpoolClient.getContext().program.account.whirlpool.all()
     ).map((p) => p.publicKey);
     // sucks to double fetch but I couldn't find another way to do this
-    let pools = await this.whirpoolClient.getPools(poolsPks);
+    let pools = await this.whirlpoolClient.getPools(poolsPks);
 
-    for (const mintA of allMintPks) {
-      for (const mintB of allMintPks) {
-        // skip loops
-        if (mintA.equals(mintB)) continue;
+    for (const pool of pools) {
+      this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
+    }
+  }
 
-        // consider backwards & forward routing
-        const relevantPools = pools.filter(
-          (p) =>
-            (p.getTokenAInfo().mint.equals(mintA) &&
-              p.getTokenBInfo().mint.equals(mintB)) ||
-            (p.getTokenAInfo().mint.equals(mintB) &&
-              p.getTokenBInfo().mint.equals(mintA))
-        );
+  async swap(
+    inputMint: PublicKey,
+    outputMint: PublicKey,
+    amount: BN,
+    otherAmountThreshold: BN,
+    mode: SwapMode,
+    slippage: number
+  ): Promise<SwapResult[]> {
+    let results: SwapResult[] = [];
 
-        const key = `FROM:${mintA.toString()} TO:${mintB.toString()}`;
-        console.log("SWAP", key, relevantPools.length, "ROUTES FOUND");
+    const A = inputMint.toString();
+    const fromA = this.routes.get(A);
+    if (!fromA) return results;
 
-        const bankA = this.mangoGroup.getFirstBankByMint(mintA);
-        const bankB = this.mangoGroup.getFirstBankByMint(mintB);
+    const Z = outputMint.toString();
+    const AtoZ = fromA?.get(Z);
 
-        let routesForKey: Route[] = [];
-        for (let referenceUsdAmount of [100, 300, 1000, 3000, 10000, 30000]) {
-          const referenceBaseAmount = referenceUsdAmount / bankA.uiPrice;
-          const referenceQuoteAmount = referenceUsdAmount / bankB.uiPrice;
+    // direct swaps A->Z
+    if (AtoZ) {
+      results = await Promise.all(
+        AtoZ.map((eAZ) =>
+          eAZ.swap(amount, otherAmountThreshold, mode, slippage)
+        )
+      );
+    }
 
-          for (let pool of relevantPools) {
-            try {
-              let quote = await swapQuoteByInputToken(
-                pool,
-                mintA,
-                toNative(referenceBaseAmount, bankA.mintDecimals),
-                slippageLimit,
-                ORCA_WHIRLPOOL_PROGRAM_ID,
-                this.whirpoolClient.getFetcher(),
-                false
-              );
+    for (const [B, AtoB] of fromA.entries()) {
+      const fromB = this.routes.get(B);
+      const BtoZ = fromB?.get(Z);
 
-              const inAmount = toUiDecimals(
-                quote.estimatedAmountIn,
-                bankA.mintDecimals
-              );
-              const outAmount = toUiDecimals(
-                quote.estimatedAmountOut,
-                bankB.mintDecimals
-              );
-              const slippage = 1 - outAmount / referenceQuoteAmount;
+      if (!BtoZ) continue;
 
-              console.log(
-                "IN:",
-                inAmount,
-                "OUT:",
-                outAmount,
-                "PRICE:",
-                inAmount / outAmount,
-                "SLIPPAGE:",
-                slippage,
-                "POOL",
-                pool.getAddress().toString()
-              );
-
-              routesForKey.push({
-                referenceUsdAmount,
-                slippage,
-                inputMint: mintA,
-                outputMint: mintB,
-                provider: RouteProvider.Whirpool,
-                details: { whirpool: pool.getAddress() },
-              });
-            } catch (e) {
-              // console.log("error", e);
-            }
+      if (mode === SwapMode.ExactIn) {
+        // swap A->B->Z amt=IN oth=OUT
+        for (const eAB of AtoB) {
+          // TODO: slippage limit should apply for whole route not single hop
+          const firstHop = await eAB.swap(amount, ZERO, mode, slippage);
+          for (const eBZ of BtoZ) {
+            const secondHop = await eBZ.swap(
+              firstHop.minAmtOut,
+              otherAmountThreshold,
+              mode,
+              slippage
+            );
+            results.push(mergeSwapResults(firstHop, secondHop));
           }
         }
-
-        this.routes.set(key, routesForKey);
+      } else if (mode === SwapMode.ExactOut) {
+        // swap A->B->Z amt=OUT oth=IN
+        for (const eBZ of BtoZ) {
+          const secondHop = await eBZ.swap(amount, ZERO, mode, slippage);
+          for (const eAB of AtoB) {
+            const firstHop = await eAB.swap(
+              secondHop.maxAmtIn,
+              otherAmountThreshold,
+              mode,
+              slippage
+            );
+            results.push(mergeSwapResults(firstHop, secondHop));
+          }
+        }
       }
+
+      // TODO: A->B->C->Z
     }
+    return results;
   }
 }
 
 async function main() {
   // init anchor, mango & orca
-  const provider = AnchorProvider.local(rpcUrl);
+  const anchorProvider = AnchorProvider.local(rpcUrl);
   const mangoClient = await MangoClient.connect(
-    provider,
+    anchorProvider,
     cluster,
     MANGO_V4_ID[cluster],
     {
       idsSource: "get-program-accounts",
     }
   );
-  const ctx = WhirlpoolContext.withProvider(
-    provider,
-    ORCA_WHIRLPOOL_PROGRAM_ID
+  const whirpoolClient = buildWhirlpoolClient(
+    WhirlpoolContext.withProvider(anchorProvider, ORCA_WHIRLPOOL_PROGRAM_ID)
   );
-  const whirpoolClient = buildWhirlpoolClient(ctx);
 
   const router = new Router(mangoClient, whirpoolClient);
-  await router.refreshWhirpools();
+  await router.start();
 
-  console.log(
-    "prepare min 8SOL for max 100 USDC",
-    await router.prepareRoute(
-      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      "So11111111111111111111111111111111111111112",
-      100,
-      8,
-      "Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT"
-    )
+  const test = await router.swap(
+    new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    new PublicKey("So11111111111111111111111111111111111111112"),
+    new BN(100_000_000),
+    new BN(8_000_000_000),
+    SwapMode.ExactOut,
+    0.0001
   );
+
+  test.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
+
+  console.log("buy 8SOL for max 100 USDC", test.slice(0, 3));
+
+  const ixs = await test[0].instructions(
+    new PublicKey("Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT")
+  );
+  console.log("ixs", ixs);
 }
 main();

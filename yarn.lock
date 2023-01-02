@@ -9,9 +9,9 @@
   dependencies:
     regenerator-runtime "^0.13.11"
 
-"@blockworks-foundation/mango-v4@https://tylersssss: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@github.com/blockworks-foundation/mango-v4.git#main":
+"@blockworks-foundation/mango-v4@https://github.com/blockworks-foundation/mango-v4.git#main":
   version "0.0.1-beta.6"
-  resolved "https://tylersssss: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@github.com/blockworks-foundation/mango-v4.git#1125002ba31176f1cb57e32cf0a1e770c583e2b6"
+  resolved "https://github.com/blockworks-foundation/mango-v4.git#0c1884ce56315417010efd6f2b0df1596f3aa604"
   dependencies:
     "@project-serum/anchor" "^0.25.0"
     "@project-serum/serum" "^0.13.65"
@@ -109,10 +109,9 @@
     decimal.js "^10.3.1"
     tiny-invariant "^1.2.0"
 
-"@orca-so/whirlpools-sdk@^0.7.2":
+"@orca-so/whirlpools-sdk@https://gitpkg.now.sh/mschneider/whirlpools/sdk?main":
   version "0.7.2"
-  resolved "https://registry.yarnpkg.com/@orca-so/whirlpools-sdk/-/whirlpools-sdk-0.7.2.tgz#b232d8a9c5212cda171c89d49b94c810b43cac78"
-  integrity sha512-FoI5ktDgROpDCRhlCTPqPW8aHWZfqHV1f/DhvTCesPT0pZZjR1nrzMHbhb3JJjlqaEq+43agLi6Uwi9Yahbx6Q==
+  resolved "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main#9d7ff3689d88d87f9d8a9d7131d7485c93bdbbd7"
   dependencies:
     "@metaplex-foundation/mpl-token-metadata" "1.2.5"
     "@orca-so/common-sdk" "^0.1.4"
