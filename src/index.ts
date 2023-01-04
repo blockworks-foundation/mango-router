@@ -59,6 +59,7 @@ interface SwapResult {
   label: string;
   maxAmtIn: BN;
   minAmtOut: BN;
+  mints: PublicKey[];
   ok: boolean;
 }
 
@@ -71,6 +72,7 @@ function mergeSwapResults(...hops: SwapResult[]) {
     label: hops.map((h) => h.label).join("_"),
     maxAmtIn: firstHop.maxAmtIn,
     minAmtOut: lastHop.minAmtOut,
+    mints: [...firstHop.mints, ...lastHop.mints],
     ok: hops.reduce((p, c) => p && c.ok, true),
   };
 }
@@ -170,6 +172,7 @@ class WhirlpoolEdge implements Edge {
         label: this.poolPk.toString().slice(0, 6),
         maxAmtIn: quote.estimatedAmountIn,
         minAmtOut: quote.estimatedAmountOut,
+        mints: [this.inputMint, this.outputMint],
       };
     } catch (e) {
       if (false) {
@@ -187,6 +190,7 @@ class WhirlpoolEdge implements Edge {
         label: "",
         maxAmtIn: amount,
         minAmtOut: otherAmountThreshold,
+        mints: [this.inputMint, this.outputMint],
         instructions: async () => [],
       };
     }
@@ -407,6 +411,7 @@ async function main() {
           slippageBps: Math.round(slippage * 10000),
           inAmount: r.maxAmtIn.toString(),
           outAmount: r.minAmtOut.toString(),
+          mints: Array.from(new Set(r.mints.map((m) => m.toString()))),
           instructions: instructions.map((i) => ({
             keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
             programId: i.programId.toString(),
