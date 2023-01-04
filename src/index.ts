@@ -3,7 +3,7 @@ import {
   MangoClient,
   MANGO_V4_ID,
 } from "@blockworks-foundation/mango-v4";
-import { Percentage, ZERO } from "@orca-so/common-sdk";
+import { Percentage, U64_MAX, ZERO } from "@orca-so/common-sdk";
 import {
   buildWhirlpoolClient,
   ORCA_WHIRLPOOL_PROGRAM_ID,
@@ -26,10 +26,25 @@ import {
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
+import cors from "cors";
+import express from "express";
 
-const { CLUSTER, RPC_URL } = process.env;
+const { CLUSTER, FLY_APP_NAME, FLY_ALLOC_ID, PORT, RPC_URL } = process.env;
+
+import * as prom from "prom-client";
+const collectDefaultMetrics = prom.collectDefaultMetrics;
+collectDefaultMetrics({
+  labels: {
+    app: FLY_APP_NAME,
+    instance: FLY_ALLOC_ID,
+  },
+});
+
+import promBundle from "express-prom-bundle";
+const promMetrics = promBundle({ includeMethod: true });
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
+const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
 
 enum SwapMode {
@@ -39,6 +54,7 @@ enum SwapMode {
 
 interface SwapResult {
   instructions: (wallet: PublicKey) => Promise<TransactionInstruction[]>;
+  label: string;
   maxAmtIn: BN;
   minAmtOut: BN;
   ok: boolean;
@@ -50,6 +66,7 @@ function mergeSwapResults(...hops: SwapResult[]) {
   return {
     instructions: async (wallet: PublicKey) =>
       await (await Promise.all(hops.map((h) => h.instructions(wallet)))).flat(),
+    label: hops.map((h) => h.label).join("_"),
     maxAmtIn: firstHop.maxAmtIn,
     minAmtOut: lastHop.minAmtOut,
     ok: hops.reduce((p, c) => p && c.ok, true),
@@ -118,9 +135,9 @@ class WhirlpoolEdge implements Edge {
           slippageLimit,
           programId,
           fetcher,
-          false
+          true
         );
-        ok = quote.estimatedAmountOut.gt(otherAmountThreshold);
+        ok = otherAmountThreshold.lte(quote.estimatedAmountOut);
       } else {
         quote = await swapQuoteByOutputToken(
           pool,
@@ -129,9 +146,9 @@ class WhirlpoolEdge implements Edge {
           slippageLimit,
           programId,
           fetcher,
-          false
+          true
         );
-        ok = quote.estimatedAmountIn.lt(otherAmountThreshold);
+        ok = otherAmountThreshold.gte(quote.estimatedAmountIn);
       }
 
       let instructions = async (wallet: PublicKey) => {
@@ -148,13 +165,24 @@ class WhirlpoolEdge implements Edge {
       return {
         ok,
         instructions,
+        label: this.poolPk.toString().slice(0, 6),
         maxAmtIn: quote.estimatedAmountIn,
         minAmtOut: quote.estimatedAmountOut,
       };
     } catch (e) {
-      console.trace("could not swap", this);
+      if (false) {
+        console.log(
+          "could not swap",
+          this.poolPk.toString().slice(0, 6),
+          this.inputMint.toString().slice(0, 6),
+          this.outputMint.toString().slice(0, 6),
+          amount.toNumber(),
+          otherAmountThreshold.toNumber()
+        );
+      }
       return {
         ok: false,
+        label: "",
         maxAmtIn: amount,
         minAmtOut: otherAmountThreshold,
         instructions: async () => [],
@@ -289,7 +317,7 @@ class Router {
       } else if (mode === SwapMode.ExactOut) {
         // swap A->B->Z amt=OUT oth=IN
         for (const eBZ of BtoZ) {
-          const secondHop = await eBZ.swap(amount, ZERO, mode, slippage);
+          const secondHop = await eBZ.swap(amount, U64_MAX, mode, slippage);
           for (const eAB of AtoB) {
             const firstHop = await eAB.swap(
               secondHop.maxAmtIn,
@@ -297,7 +325,8 @@ class Router {
               mode,
               slippage
             );
-            results.push(mergeSwapResults(firstHop, secondHop));
+            const merged = mergeSwapResults(firstHop, secondHop);
+            results.push(merged);
           }
         }
       }
@@ -326,22 +355,69 @@ async function main() {
   const router = new Router(mangoClient, whirpoolClient);
   await router.start();
 
-  const test = await router.swap(
-    new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
-    new PublicKey("So11111111111111111111111111111111111111112"),
-    new BN(100_000_000),
-    new BN(8_000_000_000),
-    SwapMode.ExactOut,
-    0.0001
-  );
+  const app = express();
+  app.use(promMetrics);
+  app.use(cors());
+  app.get("/swap", async (req, res) => {
+    const wallet = new PublicKey(req.query.wallet as string);
+    const inputMint = new PublicKey(req.query.inputMint as string);
+    const outputMint = new PublicKey(req.query.outputMint as string);
+    const mode = req.query.mode as SwapMode;
+    const slippage = Number(req.query.slippage as string);
+    const amount = new BN(req.query.amount as string);
+    const otherAmountThreshold = req.query.otherAmountThreshold
+      ? new BN(req.query.otherAmountThreshold as string)
+      : mode == SwapMode.ExactIn
+      ? ZERO
+      : U64_MAX;
 
-  test.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
+    if (mode !== SwapMode.ExactIn && mode !== SwapMode.ExactOut) {
+      const error = { e: "mode needs to be one of ExactIn or ExactOut" };
+      res.status(404).send(error);
+      return;
+    }
 
-  console.log("buy 8SOL for max 100 USDC", test.slice(0, 3));
+    const results = await router.swap(
+      inputMint,
+      outputMint,
+      amount,
+      otherAmountThreshold,
+      mode,
+      slippage
+    );
 
-  const ixs = await test[0].instructions(
-    new PublicKey("Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT")
-  );
-  console.log("ixs", ixs);
+    const filtered = results.filter((r) => r.ok);
+    let ranked: SwapResult[] = [];
+    if (mode === SwapMode.ExactIn) {
+      ranked = filtered.sort((a, b) => b.minAmtOut.sub(a.minAmtOut).toNumber());
+    } else if (mode === SwapMode.ExactOut) {
+      ranked = filtered.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
+    }
+    const topN = ranked.slice(0, Math.min(ranked.length, 5));
+
+    const response = await Promise.all(
+      topN.map(async (r) => {
+        const instructions = await r.instructions(wallet);
+        return {
+          amount: amount.toString(),
+          otherAmountThreshold: otherAmountThreshold.toString(),
+          swapMode: mode,
+          slippageBps: Math.round(slippage * 10000),
+          inAmount: r.maxAmtIn.toString(),
+          outAmount: r.minAmtOut.toString(),
+          instructions: instructions.map((i) => ({
+            keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
+            programId: i.programId.toString(),
+            data: i.data.toString("base64"),
+          })),
+        };
+      })
+    );
+
+    res.send(response);
+  });
+  app.listen(port);
+  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=7000000000&slippage=0.001
+  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactOut&amount=7000000000&otherAmountThreshold=100000000&slippage=0.001
 }
 main();

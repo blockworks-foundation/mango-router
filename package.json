@@ -3,14 +3,21 @@
   "version": "1.0.0",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^4.9.4",
-    "ts-node": "^10.9.1"
+    "@types/cors": "^2.8.13",
+    "@types/express": "^4.17.15",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.9.4"
   },
   "dependencies": {
+    "@blockworks-foundation/mango-v4": "https://github.com/blockworks-foundation/mango-v4.git#main",
     "@orca-so/common-sdk": "^0.1.4",
     "@orca-so/whirlpools-sdk": "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main",
     "@project-serum/anchor": "^0.26.0",
     "@solana/web3.js": "^1.70.1",
-    "@blockworks-foundation/mango-v4": "https://github.com/blockworks-foundation/mango-v4.git#main"
+    "@types/bn.js": "^5.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-prom-bundle": "^6.6.0",
+    "prom-client": "^14.1.1"
   }
 }
