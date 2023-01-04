@@ -109,9 +109,9 @@
     decimal.js "^10.3.1"
     tiny-invariant "^1.2.0"
 
-"@orca-so/whirlpools-sdk@https://gitpkg.now.sh/mschneider/whirlpools/sdk?main":
+"@orca-so/whirlpools-sdk@https://gitpkg.now.sh/mschneider/whirlpools/sdk?main&scripts.postinstall=npm%20install%20--ignore-scripts%20--force%20%26%26%20npm%20run%20build":
   version "0.7.2"
-  resolved "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main#9d7ff3689d88d87f9d8a9d7131d7485c93bdbbd7"
+  resolved "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main&scripts.postinstall=npm%20install%20--ignore-scripts%20--force%20%26%26%20npm%20run%20build#ae6ce096a3c6e082373c4a08747d2b1a6384a030"
   dependencies:
     "@metaplex-foundation/mpl-token-metadata" "1.2.5"
     "@orca-so/common-sdk" "^0.1.4"
