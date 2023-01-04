@@ -29,7 +29,8 @@ import {
 import cors from "cors";
 import express from "express";
 
-const { CLUSTER, FLY_APP_NAME, FLY_ALLOC_ID, PORT, RPC_URL } = process.env;
+const { CLUSTER, FLY_APP_NAME, FLY_ALLOC_ID, MAX_ROUTES, PORT, RPC_URL } =
+  process.env;
 
 import * as prom from "prom-client";
 const collectDefaultMetrics = prom.collectDefaultMetrics;
@@ -44,6 +45,7 @@ import promBundle from "express-prom-bundle";
 const promMetrics = promBundle({ includeMethod: true });
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
+const maxRoutes = parseInt(MAX_ROUTES || "2");
 const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
 
@@ -393,7 +395,7 @@ async function main() {
     } else if (mode === SwapMode.ExactOut) {
       ranked = filtered.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
     }
-    const topN = ranked.slice(0, Math.min(ranked.length, 5));
+    const topN = ranked.slice(0, Math.min(ranked.length, maxRoutes));
 
     const response = await Promise.all(
       topN.map(async (r) => {
