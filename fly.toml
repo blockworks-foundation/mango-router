@@ -1,0 +1,15 @@
+app = "mango-router"
+kill_signal = "SIGINT"
+kill_timeout = 5
+
+[env]
+  PORT = "8080"
+
+[[services]]
+  processes = ["app"]
+  internal_port = 8080
+  protocol = "tcp"
+
+[metrics]
+  port = 9091
+  path = "/metrics"
