@@ -2,6 +2,7 @@ import {
   getAssociatedTokenAddress,
   MangoClient,
   MANGO_V4_ID,
+  toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
 import { Percentage, U64_MAX, ZERO } from "@orca-so/common-sdk";
 import {
@@ -29,8 +30,15 @@ import {
 import cors from "cors";
 import express from "express";
 
-const { CLUSTER, FLY_APP_NAME, FLY_ALLOC_ID, MAX_ROUTES, PORT, RPC_URL } =
-  process.env;
+const {
+  CLUSTER,
+  FLY_APP_NAME,
+  FLY_ALLOC_ID,
+  MAX_ROUTES,
+  MIN_TVL,
+  PORT,
+  RPC_URL,
+} = process.env;
 
 import * as prom from "prom-client";
 const collectDefaultMetrics = prom.collectDefaultMetrics;
@@ -46,6 +54,7 @@ const promMetrics = promBundle({ includeMethod: true });
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
 const maxRoutes = parseInt(MAX_ROUTES || "2");
+const minTvl = parseInt(MIN_TVL || "500");
 const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
 
@@ -262,13 +271,82 @@ class Router {
   }
 
   async indexWhirpools(): Promise<void> {
-    let poolsPks = (
+    const poolsPks = (
       await this.whirlpoolClient.getContext().program.account.whirlpool.all()
     ).map((p) => p.publicKey);
     // sucks to double fetch but I couldn't find another way to do this
-    let pools = await this.whirlpoolClient.getPools(poolsPks);
+    const pools = await this.whirlpoolClient.getPools(poolsPks);
+    const mints = Array.from(
+      new Set(
+        pools.flatMap((p) => [
+          p.getTokenAInfo().mint.toString(),
+          p.getTokenBInfo().mint.toString(),
+        ])
+      )
+    );
+    const prices: Record<string, number> = {};
+    const batchSize = 64;
+    for (let i = 0; i < mints.length; i += batchSize) {
+      const mintBatch = mints.slice(i, i + batchSize);
+      const quoteResponse = await fetch(
+        `https://quote-api.jup.ag/v4/price?ids=${mintBatch.join(",")}`
+      );
+      const quotes = await quoteResponse.json();
 
-    for (const pool of pools) {
+      for (const pk in quotes.data) {
+        prices[pk] = quotes.data[pk].price;
+      }
+    }
+
+    const filtered = pools.filter((p) => {
+      const mintA = p.getTokenAInfo().mint.toString();
+      const mintB = p.getTokenBInfo().mint.toString();
+      const priceA = prices[mintA];
+      const priceB = prices[mintB];
+
+      if (!priceA || !priceB) {
+        console.log(
+          "filter pool",
+          p.getAddress().toString(),
+          "unknown price for mint",
+          priceA ? mintB : mintA
+        );
+        return false;
+      }
+
+      const vaultBalanceA = toUiDecimals(
+        p.getTokenVaultAInfo().amount,
+        p.getTokenAInfo().decimals
+      );
+      const vaultBalanceB = toUiDecimals(
+        p.getTokenVaultBInfo().amount,
+        p.getTokenBInfo().decimals
+      );
+
+      const tvl = vaultBalanceA * priceA + vaultBalanceB * priceB;
+      if (tvl <= minTvl) {
+        console.log(
+          "filter pool",
+          p.getAddress().toString(),
+          "tvl",
+          tvl,
+          mintA,
+          mintB
+        );
+        return false;
+      }
+
+      return true;
+    });
+
+    console.log(
+      "found",
+      poolsPks.length,
+      "pools. filtered down to",
+      filtered.length,
+      "pools"
+    );
+    for (const pool of filtered) {
       this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
     }
   }
