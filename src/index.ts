@@ -148,7 +148,7 @@ class WhirlpoolEdge implements Edge {
           slippageLimit,
           programId,
           fetcher,
-          true
+          false
         );
         ok = otherAmountThreshold.lte(quote.estimatedAmountOut);
       } else {
@@ -159,7 +159,7 @@ class WhirlpoolEdge implements Edge {
           slippageLimit,
           programId,
           fetcher,
-          true
+          false
         );
         ok = otherAmountThreshold.gte(quote.estimatedAmountIn);
       }
@@ -275,7 +275,7 @@ class Router {
       await this.whirlpoolClient.getContext().program.account.whirlpool.all()
     ).map((p) => p.publicKey);
     // sucks to double fetch but I couldn't find another way to do this
-    const pools = await this.whirlpoolClient.getPools(poolsPks);
+    const pools = await this.whirlpoolClient.getPools(poolsPks, true);
     const mints = Array.from(
       new Set(
         pools.flatMap((p) => [
