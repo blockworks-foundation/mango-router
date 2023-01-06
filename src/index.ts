@@ -17,15 +17,18 @@ import {
 } from "@orca-so/whirlpools-sdk";
 import {
   AnchorProvider,
+  Wallet,
   BN,
   BorshAccountsCoder,
   Idl,
 } from "@project-serum/anchor";
 import {
+  Connection,
   Cluster,
   clusterApiUrl,
   PublicKey,
   TransactionInstruction,
+  Keypair,
 } from "@solana/web3.js";
 import cors from "cors";
 import express from "express";
@@ -50,13 +53,25 @@ collectDefaultMetrics({
 });
 
 import promBundle from "express-prom-bundle";
-const promMetrics = promBundle({ includeMethod: true });
+const metricsApp = express();
+const promMetrics = promBundle({
+  includeMethod: true,
+  metricsApp,
+  autoregister: false,
+});
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
 const maxRoutes = parseInt(MAX_ROUTES || "2");
 const minTvl = parseInt(MIN_TVL || "500");
 const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
+
+const metricSwapDuration = new prom.Histogram({
+  name: "swap_processing_duration",
+  help: "Swap processing duration",
+  buckets: [10, 20, 30, 40],
+});
+prom.register.registerMetric(metricSwapDuration);
 
 enum SwapMode {
   ExactIn = "ExactIn",
@@ -423,7 +438,12 @@ class Router {
 
 async function main() {
   // init anchor, mango & orca
-  const anchorProvider = AnchorProvider.local(rpcUrl);
+  const connection = new Connection(rpcUrl, "confirmed");
+  const anchorProvider = new AnchorProvider(
+    connection,
+    new Wallet(Keypair.generate()),
+    {}
+  );
   const mangoClient = await MangoClient.connect(
     anchorProvider,
     cluster,
@@ -443,65 +463,77 @@ async function main() {
   app.use(promMetrics);
   app.use(cors());
   app.get("/swap", async (req, res) => {
-    const wallet = new PublicKey(req.query.wallet as string);
-    const inputMint = new PublicKey(req.query.inputMint as string);
-    const outputMint = new PublicKey(req.query.outputMint as string);
-    const mode = req.query.mode as SwapMode;
-    const slippage = Number(req.query.slippage as string);
-    const amount = new BN(req.query.amount as string);
-    const otherAmountThreshold = req.query.otherAmountThreshold
-      ? new BN(req.query.otherAmountThreshold as string)
-      : mode == SwapMode.ExactIn
-      ? ZERO
-      : U64_MAX;
+    try {
+      const wallet = new PublicKey(req.query.wallet as string);
+      const inputMint = new PublicKey(req.query.inputMint as string);
+      const outputMint = new PublicKey(req.query.outputMint as string);
+      const mode = req.query.mode as SwapMode;
+      const slippage = Number(req.query.slippage as string);
+      const amount = new BN(req.query.amount as string);
+      const otherAmountThreshold = req.query.otherAmountThreshold
+        ? new BN(req.query.otherAmountThreshold as string)
+        : mode == SwapMode.ExactIn
+        ? ZERO
+        : U64_MAX;
 
-    if (mode !== SwapMode.ExactIn && mode !== SwapMode.ExactOut) {
-      const error = { e: "mode needs to be one of ExactIn or ExactOut" };
-      res.status(404).send(error);
-      return;
+      if (mode !== SwapMode.ExactIn && mode !== SwapMode.ExactOut) {
+        const error = { e: "mode needs to be one of ExactIn or ExactOut" };
+        res.status(404).send(error);
+        return;
+      }
+
+      const timerSwapDuration = metricSwapDuration.startTimer();
+      const results = await router.swap(
+        inputMint,
+        outputMint,
+        amount,
+        otherAmountThreshold,
+        mode,
+        slippage
+      );
+      const swapDuration = timerSwapDuration();
+      metricSwapDuration.observe(swapDuration);
+      console.log("swap", swapDuration);
+
+      const filtered = results.filter((r) => r.ok);
+      let ranked: SwapResult[] = [];
+      if (mode === SwapMode.ExactIn) {
+        ranked = filtered.sort((a, b) =>
+          b.minAmtOut.sub(a.minAmtOut).toNumber()
+        );
+      } else if (mode === SwapMode.ExactOut) {
+        ranked = filtered.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
+      }
+      const topN = ranked.slice(0, Math.min(ranked.length, maxRoutes));
+
+      const response = await Promise.all(
+        topN.map(async (r) => {
+          const instructions = await r.instructions(wallet);
+          return {
+            amount: amount.toString(),
+            otherAmountThreshold: otherAmountThreshold.toString(),
+            swapMode: mode,
+            slippageBps: Math.round(slippage * 10000),
+            inAmount: r.maxAmtIn.toString(),
+            outAmount: r.minAmtOut.toString(),
+            mints: Array.from(new Set(r.mints.map((m) => m.toString()))),
+            instructions: instructions.map((i) => ({
+              keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
+              programId: i.programId.toString(),
+              data: i.data.toString("base64"),
+            })),
+          };
+        })
+      );
+
+      res.send(response);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send();
     }
-
-    const results = await router.swap(
-      inputMint,
-      outputMint,
-      amount,
-      otherAmountThreshold,
-      mode,
-      slippage
-    );
-
-    const filtered = results.filter((r) => r.ok);
-    let ranked: SwapResult[] = [];
-    if (mode === SwapMode.ExactIn) {
-      ranked = filtered.sort((a, b) => b.minAmtOut.sub(a.minAmtOut).toNumber());
-    } else if (mode === SwapMode.ExactOut) {
-      ranked = filtered.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
-    }
-    const topN = ranked.slice(0, Math.min(ranked.length, maxRoutes));
-
-    const response = await Promise.all(
-      topN.map(async (r) => {
-        const instructions = await r.instructions(wallet);
-        return {
-          amount: amount.toString(),
-          otherAmountThreshold: otherAmountThreshold.toString(),
-          swapMode: mode,
-          slippageBps: Math.round(slippage * 10000),
-          inAmount: r.maxAmtIn.toString(),
-          outAmount: r.minAmtOut.toString(),
-          mints: Array.from(new Set(r.mints.map((m) => m.toString()))),
-          instructions: instructions.map((i) => ({
-            keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
-            programId: i.programId.toString(),
-            data: i.data.toString("base64"),
-          })),
-        };
-      })
-    );
-
-    res.send(response);
   });
   app.listen(port);
+  metricsApp.listen(9091);
   // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=7000000000&slippage=0.001
   // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactOut&amount=7000000000&otherAmountThreshold=100000000&slippage=0.001
 }
