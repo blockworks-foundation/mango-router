@@ -601,8 +601,8 @@ async function main() {
           return {
             amount: amount.toString(),
             otherAmountThreshold: otherAmountThreshold.toString(),
-            swapMode: mode,
-            slippageBps: Math.round(slippage * 10000),
+            mode,
+            slippage,
             inAmount: r.maxAmtIn.toString(),
             outAmount: r.minAmtOut.toString(),
             priceImpact,
