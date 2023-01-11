@@ -327,7 +327,7 @@ class Router {
       const quoteResponse = await fetch(
         `https://quote-api.jup.ag/v4/price?ids=${mintBatch.join(",")}`
       );
-      const quotes = await quoteResponse.json();
+      const quotes: any = await quoteResponse.json();
 
       for (const pk in quotes.data) {
         prices[pk] = quotes.data[pk].price;
