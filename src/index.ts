@@ -2,6 +2,7 @@ import {
   getAssociatedTokenAddress,
   MangoClient,
   MANGO_V4_ID,
+  ONE_I80F48,
   toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
 import { Percentage, U64_MAX, ZERO } from "@orca-so/common-sdk";
@@ -37,6 +38,7 @@ const {
   CLUSTER,
   FLY_APP_NAME,
   FLY_ALLOC_ID,
+  GROUP,
   MAX_ROUTES,
   MIN_TVL,
   PORT,
@@ -61,7 +63,10 @@ const promMetrics = promBundle({
 });
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
-const maxRoutes = parseInt(MAX_ROUTES || "2");
+const groupPk = new PublicKey(
+  GROUP || "78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX"
+);
+const maxRoutes = parseInt(MAX_ROUTES || "1");
 const minTvl = parseInt(MIN_TVL || "500");
 const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
@@ -437,13 +442,15 @@ class Router {
 }
 
 async function main() {
-  // init anchor, mango & orca
+  // init anchor
   const connection = new Connection(rpcUrl, "confirmed");
   const anchorProvider = new AnchorProvider(
     connection,
     new Wallet(Keypair.generate()),
     {}
   );
+
+  // init mango
   const mangoClient = await MangoClient.connect(
     anchorProvider,
     cluster,
@@ -452,10 +459,44 @@ async function main() {
       idsSource: "get-program-accounts",
     }
   );
+  const group = await mangoClient.getGroup(groupPk);
+  await group.reloadAll(mangoClient);
+
+  const banks = Array.from(group.banksMapByMint, ([, value]) => value);
+  const coder = new BorshAccountsCoder(mangoClient.program.idl);
+  const subs = banks.map(([bank]) =>
+    anchorProvider.connection.onAccountChange(
+      bank.oracle,
+      async (ai, ctx) => {
+        if (bank.name === "USDC") {
+          bank._price = ONE_I80F48();
+          bank._uiPrice = 1;
+        } else {
+          if (!ai)
+            throw new Error(
+              `Undefined accountInfo object in onAccountChange(bank.oracle) for ${bank.oracle.toString()}!`
+            );
+          const { price, uiPrice } = await group["decodePriceFromOracleAi"](
+            coder,
+            bank.oracle,
+            ai,
+            group.getMintDecimals(bank.mint),
+            mangoClient
+          );
+          bank._price = price;
+          bank._uiPrice = uiPrice;
+        }
+      },
+      "processed"
+    )
+  );
+
+  // init orca
   const whirpoolClient = buildWhirlpoolClient(
     WhirlpoolContext.withProvider(anchorProvider, ORCA_WHIRLPOOL_PROGRAM_ID)
   );
 
+  // init router
   const router = new Router(mangoClient, whirpoolClient);
   await router.start();
 
@@ -464,9 +505,11 @@ async function main() {
   app.use(cors());
   app.get("/swap", async (req, res) => {
     try {
-      const wallet = new PublicKey(req.query.wallet as string);
-      const inputMint = new PublicKey(req.query.inputMint as string);
-      const outputMint = new PublicKey(req.query.outputMint as string);
+      const walletPk = new PublicKey(req.query.wallet as string);
+      const inputMint = req.query.inputMint as string;
+      const inputMintPk = new PublicKey(inputMint);
+      const outputMint = req.query.outputMint as string;
+      const outputMintPk = new PublicKey(outputMint);
       const mode = req.query.mode as SwapMode;
       const slippage = Number(req.query.slippage as string);
       const amount = new BN(req.query.amount as string);
@@ -475,6 +518,19 @@ async function main() {
         : mode == SwapMode.ExactIn
         ? ZERO
         : U64_MAX;
+      let referencePrice: number;
+      if (
+        group.banksMapByMint.has(inputMint) &&
+        group.banksMapByMint.has(outputMint)
+      ) {
+        const inputBank = group.banksMapByMint.get(inputMint)![0];
+        const outputBank = group.banksMapByMint.get(outputMint)![0];
+
+        referencePrice =
+          (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
+            outputBank.uiPrice) /
+          inputBank.uiPrice;
+      }
 
       if (mode !== SwapMode.ExactIn && mode !== SwapMode.ExactOut) {
         const error = { e: "mode needs to be one of ExactIn or ExactOut" };
@@ -484,8 +540,8 @@ async function main() {
 
       const timerSwapDuration = metricSwapDuration.startTimer();
       const results = await router.swap(
-        inputMint,
-        outputMint,
+        inputMintPk,
+        outputMintPk,
         amount,
         otherAmountThreshold,
         mode,
@@ -508,7 +564,24 @@ async function main() {
 
       const response = await Promise.all(
         topN.map(async (r) => {
-          const instructions = await r.instructions(wallet);
+          const instructions = await r.instructions(walletPk);
+          let priceImpact: number | undefined = undefined;
+          if (referencePrice) {
+            if (mode == SwapMode.ExactIn) {
+              const referenceAmount = r.maxAmtIn.toNumber() / referencePrice;
+              priceImpact = Math.max(
+                0,
+                1 - r.minAmtOut.toNumber() / referenceAmount
+              );
+            } else {
+              const referenceAmount = r.minAmtOut.toNumber() * referencePrice;
+              priceImpact = Math.max(
+                0,
+                1 - referenceAmount / r.maxAmtIn.toNumber()
+              );
+            }
+          }
+
           return {
             amount: amount.toString(),
             otherAmountThreshold: otherAmountThreshold.toString(),
@@ -516,6 +589,7 @@ async function main() {
             slippageBps: Math.round(slippage * 10000),
             inAmount: r.maxAmtIn.toString(),
             outAmount: r.minAmtOut.toString(),
+            priceImpact,
             mints: Array.from(new Set(r.mints.map((m) => m.toString()))),
             instructions: instructions.map((i) => ({
               keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
