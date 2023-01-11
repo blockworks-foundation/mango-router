@@ -583,19 +583,8 @@ async function main() {
           const instructions = await r.instructions(walletPk);
           let priceImpact: number | undefined = undefined;
           if (referencePrice) {
-            if (mode == SwapMode.ExactIn) {
-              const referenceAmount = r.maxAmtIn.toNumber() / referencePrice;
-              priceImpact = Math.max(
-                0,
-                1 - r.minAmtOut.toNumber() / referenceAmount
-              );
-            } else {
-              const referenceAmount = r.minAmtOut.toNumber() * referencePrice;
-              priceImpact = Math.max(
-                0,
-                1 - referenceAmount / r.maxAmtIn.toNumber()
-              );
-            }
+            const actualPrice = r.maxAmtIn.toNumber() / r.minAmtOut.toNumber();
+            priceImpact = actualPrice / referencePrice - 1;
           }
 
           return {
