@@ -1,6 +1,6 @@
 FROM debian:bullseye as builder
 
-ARG NODE_VERSION=16.17.0
+ARG NODE_VERSION=18.12.1
 ARG YARN_VERSION=1.22.19
 
 RUN apt-get update; apt install -y curl git openssh-client openssh-server
