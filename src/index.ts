@@ -86,6 +86,10 @@ enum SwapMode {
 interface SwapResult {
   instructions: (wallet: PublicKey) => Promise<TransactionInstruction[]>;
   label: string;
+  marketInfos: {
+    label: string;
+    fee: { amount: BN; mint: PublicKey; rate: number };
+  }[];
   maxAmtIn: BN;
   minAmtOut: BN;
   mints: PublicKey[];
@@ -99,6 +103,7 @@ function mergeSwapResults(...hops: SwapResult[]) {
     instructions: async (wallet: PublicKey) =>
       await (await Promise.all(hops.map((h) => h.instructions(wallet)))).flat(),
     label: hops.map((h) => h.label).join("_"),
+    marketInfos: [...firstHop.marketInfos, ...lastHop.marketInfos],
     maxAmtIn: firstHop.maxAmtIn,
     minAmtOut: lastHop.minAmtOut,
     mints: [...firstHop.mints, ...lastHop.mints],
@@ -199,6 +204,16 @@ class WhirlpoolEdge implements Edge {
         ok,
         instructions,
         label: this.poolPk.toString().slice(0, 6),
+        marketInfos: [
+          {
+            label: "Orca Whirpool",
+            fee: {
+              amount: quote.estimatedFeeAmount,
+              mint: this.inputMint,
+              rate: pool.getData().feeRate * 1e-6,
+            },
+          },
+        ],
         maxAmtIn: quote.estimatedAmountIn,
         minAmtOut: quote.estimatedAmountOut,
         mints: [this.inputMint, this.outputMint],
@@ -217,6 +232,7 @@ class WhirlpoolEdge implements Edge {
       return {
         ok: false,
         label: "",
+        marketInfos: [],
         maxAmtIn: amount,
         minAmtOut: otherAmountThreshold,
         mints: [this.inputMint, this.outputMint],
@@ -590,6 +606,14 @@ async function main() {
             inAmount: r.maxAmtIn.toString(),
             outAmount: r.minAmtOut.toString(),
             priceImpact,
+            marketInfos: r.marketInfos.map((m) => ({
+              label: m.label,
+              fee: {
+                amount: m.fee.amount.toString(),
+                mint: m.fee.mint.toString(),
+                rate: m.fee.rate,
+              },
+            })),
             mints: Array.from(new Set(r.mints.map((m) => m.toString()))),
             instructions: instructions.map((i) => ({
               keys: i.keys.map((k) => ({ ...k, pubkey: k.pubkey.toString() })),
