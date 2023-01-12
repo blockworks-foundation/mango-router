@@ -72,9 +72,9 @@ const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
 
 const metricSwapDuration = new prom.Histogram({
-  name: "swap_processing_duration",
-  help: "Swap processing duration",
-  buckets: [10, 20, 30, 40],
+  name: "swap_processing_duration_s",
+  help: "Swap processing duration in seconds",
+  buckets: [0.1, 0.2, 0.5, 1, 5, 10, 20],
 });
 prom.register.registerMetric(metricSwapDuration);
 
