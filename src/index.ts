@@ -3,6 +3,7 @@ import {
   MangoClient,
   MANGO_V4_ID,
   ONE_I80F48,
+  toNative,
   toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
 import { Percentage, U64_MAX, ZERO } from "@orca-so/common-sdk";
@@ -78,6 +79,13 @@ const metricSwapDuration = new prom.Histogram({
 });
 prom.register.registerMetric(metricSwapDuration);
 
+interface DepthResult {
+  label: string;
+  maxAmtIn: BN;
+  minAmtOut: BN;
+  ok: boolean;
+}
+
 enum SwapMode {
   ExactIn = "ExactIn",
   ExactOut = "ExactOut",
@@ -134,20 +142,19 @@ class WhirlpoolEdge implements Edge {
 
   static pairFromPool(pool: Whirlpool, client: WhirlpoolClient): Edge[] {
     const fwd = new WhirlpoolEdge(
-      "Whirlpool",
+      pool.getAddress().toString().slice(0, 6),
       pool.getTokenAInfo().mint,
       pool.getTokenBInfo().mint,
       pool.getAddress(),
       client
     );
     const bwd = new WhirlpoolEdge(
-      "Whirpool",
+      pool.getAddress().toString().slice(0, 6),
       pool.getTokenBInfo().mint,
       pool.getTokenAInfo().mint,
       pool.getAddress(),
       client
     );
-
     return [fwd, bwd];
   }
 
@@ -206,7 +213,7 @@ class WhirlpoolEdge implements Edge {
         label: this.poolPk.toString().slice(0, 6),
         marketInfos: [
           {
-            label: "Orca Whirpool",
+            label: "Whirlpool",
             fee: {
               amount: quote.estimatedFeeAmount,
               mint: this.inputMint,
@@ -219,16 +226,14 @@ class WhirlpoolEdge implements Edge {
         mints: [this.inputMint, this.outputMint],
       };
     } catch (e) {
-      if (false) {
-        console.log(
-          "could not swap",
-          this.poolPk.toString().slice(0, 6),
-          this.inputMint.toString().slice(0, 6),
-          this.outputMint.toString().slice(0, 6),
-          amount.toNumber(),
-          otherAmountThreshold.toNumber()
-        );
-      }
+      // console.log(
+      //   "could not swap",
+      //   this.poolPk.toString().slice(0, 6),
+      //   this.inputMint.toString().slice(0, 6),
+      //   this.outputMint.toString().slice(0, 6),
+      //   amount.toNumber(),
+      //   otherAmountThreshold.toNumber()
+      // );
       return {
         ok: false,
         label: "",
@@ -248,7 +253,7 @@ class Router {
 
   whirlpoolSub?: number;
 
-  constructor(mangoClient: MangoClient, whirpoolClient: WhirlpoolClient) {
+  constructor(whirpoolClient: WhirlpoolClient) {
     this.whirlpoolClient = whirpoolClient;
     this.routes = new Map();
   }
@@ -341,12 +346,12 @@ class Router {
       const priceB = prices[mintB];
 
       if (!priceA || !priceB) {
-        console.log(
-          "filter pool",
-          p.getAddress().toString(),
-          "unknown price for mint",
-          priceA ? mintB : mintA
-        );
+        // console.log(
+        //   "filter pool",
+        //   p.getAddress().toString(),
+        //   "unknown price for mint",
+        //   priceA ? mintB : mintA
+        // );
         return false;
       }
 
@@ -361,14 +366,14 @@ class Router {
 
       const tvl = vaultBalanceA * priceA + vaultBalanceB * priceB;
       if (tvl <= minTvl) {
-        console.log(
-          "filter pool",
-          p.getAddress().toString(),
-          "tvl",
-          tvl,
-          mintA,
-          mintB
-        );
+        // console.log(
+        //   "filter pool",
+        //   p.getAddress().toString(),
+        //   "tvl",
+        //   tvl,
+        //   mintA,
+        //   mintB
+        // );
         return false;
       }
 
@@ -378,13 +383,139 @@ class Router {
     console.log(
       "found",
       poolsPks.length,
-      "pools. filtered down to",
+      "pools.",
       filtered.length,
-      "pools"
+      "of those with TVL >",
+      minTvl,
+      "USD"
     );
+
+    this.routes = new Map();
     for (const pool of filtered) {
       this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
     }
+  }
+
+  async queryDepth(
+    inputMint: PublicKey,
+    outputMint: PublicKey,
+    startAmount: BN,
+    referencePrice: number,
+    priceImpactLimit: number
+  ): Promise<DepthResult[]> {
+    let results: DepthResult[] = [];
+
+    const A = inputMint.toString();
+    const fromA = this.routes.get(A);
+    if (!fromA) return results;
+
+    const Z = outputMint.toString();
+    const AtoZ = fromA?.get(Z);
+
+    // direct swaps A->Z
+    if (AtoZ) {
+      results = await Promise.all(
+        AtoZ.map(async (eAZ) => {
+          let bestResult = {
+            label: eAZ.label,
+            maxAmtIn: ZERO,
+            minAmtOut: ZERO,
+            ok: false,
+          };
+          let inAmount = startAmount;
+          while (inAmount.lt(U64_MAX)) {
+            let outAmountThreshold = inAmount
+              .divn(referencePrice)
+              .muln(1 - priceImpactLimit);
+            let swapResult = await eAZ.swap(
+              inAmount,
+              outAmountThreshold,
+              SwapMode.ExactIn,
+              0
+            );
+            let actualPrice =
+              Number(swapResult.maxAmtIn.toString()) /
+              Number(swapResult.minAmtOut.toString());
+            let priceImpact = actualPrice / referencePrice - 1;
+
+            if (!swapResult.ok || priceImpact >= priceImpactLimit) break;
+
+            bestResult = { ...swapResult, ok: true };
+            inAmount = inAmount.muln(1.1);
+          }
+          return bestResult;
+        })
+      );
+    }
+
+    // swap A->B->Z
+    for (const [B, AtoB] of fromA.entries()) {
+      const fromB = this.routes.get(B);
+      const BtoZ = fromB?.get(Z);
+
+      if (!BtoZ) continue;
+
+      // swap A->B->Z amt=IN oth=OUT
+      for (const eAB of AtoB) {
+        for (const eBZ of BtoZ) {
+          let bestResult = {
+            label: `${eAB.label}_${eBZ.label}`,
+            maxAmtIn: ZERO,
+            minAmtOut: ZERO,
+            ok: false,
+          };
+          let inAmount = startAmount;
+
+          while (inAmount.lt(U64_MAX)) {
+            let outAmountThreshold = inAmount
+              .divn(referencePrice)
+              .muln(1 - priceImpactLimit);
+            const firstHop = await eAB.swap(
+              inAmount,
+              ZERO,
+              SwapMode.ExactIn,
+              0
+            );
+            const secondHop = await eBZ.swap(
+              firstHop.minAmtOut,
+              outAmountThreshold,
+              SwapMode.ExactIn,
+              0
+            );
+            let actualPrice =
+              Number(firstHop.maxAmtIn.toString()) /
+              Number(secondHop.minAmtOut.toString());
+            let priceImpact = actualPrice / referencePrice - 1;
+
+            if (
+              !firstHop.ok ||
+              !secondHop.ok ||
+              priceImpact >= priceImpactLimit
+            )
+              break;
+
+            bestResult = {
+              label: `${firstHop.label}_${secondHop.label}`,
+              maxAmtIn: firstHop.maxAmtIn,
+              minAmtOut: secondHop.minAmtOut,
+              ok: true,
+            };
+            inAmount = inAmount.muln(2 ** 0.5);
+          }
+
+          // console.log(
+          //   "depth",
+          //   B,
+          //   bestResult.label,
+          //   bestResult.ok,
+          //   bestResult.maxAmtIn.toString()
+          // );
+          results.push(bestResult);
+        }
+      }
+    }
+
+    return results;
   }
 
   async swap(
@@ -484,24 +615,19 @@ async function main() {
     anchorProvider.connection.onAccountChange(
       bank.oracle,
       async (ai, ctx) => {
-        if (bank.name === "USDC") {
-          bank._price = ONE_I80F48();
-          bank._uiPrice = 1;
-        } else {
-          if (!ai)
-            throw new Error(
-              `Undefined accountInfo object in onAccountChange(bank.oracle) for ${bank.oracle.toString()}!`
-            );
-          const { price, uiPrice } = await group["decodePriceFromOracleAi"](
-            coder,
-            bank.oracle,
-            ai,
-            group.getMintDecimals(bank.mint),
-            mangoClient
+        if (!ai)
+          throw new Error(
+            `Undefined accountInfo object in onAccountChange(bank.oracle) for ${bank.oracle.toString()}!`
           );
-          bank._price = price;
-          bank._uiPrice = uiPrice;
-        }
+        const { price, uiPrice } = await group["decodePriceFromOracleAi"](
+          coder,
+          bank.oracle,
+          ai,
+          group.getMintDecimals(bank.mint),
+          mangoClient
+        );
+        bank._price = price;
+        bank._uiPrice = uiPrice;
       },
       "processed"
     )
@@ -513,12 +639,58 @@ async function main() {
   );
 
   // init router
-  const router = new Router(mangoClient, whirpoolClient);
+  const router = new Router(whirpoolClient);
   await router.start();
 
   const app = express();
   app.use(promMetrics);
   app.use(cors());
+  app.get("/depth", async (req, res) => {
+    try {
+      const inputMint = new PublicKey(req.query.inputMint as string);
+      const outputMint = new PublicKey(req.query.outputMint as string);
+      const priceImpactLimit = Number(req.query.priceImpactLimit as string);
+
+      const inputBank = group.getFirstBankByMint(inputMint);
+      const outputBank = group.getFirstBankByMint(outputMint);
+
+      // input = referencePrice * output
+      const referencePrice =
+        (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
+          outputBank.uiPrice) /
+        inputBank.uiPrice;
+
+      // start with $100 and slowly increase until hitting threshold
+      const startAmount = toNative(
+        100 / inputBank.uiPrice,
+        inputBank.mintDecimals
+      );
+
+      const results = await router.queryDepth(
+        inputMint,
+        outputMint,
+        startAmount,
+        referencePrice,
+        priceImpactLimit
+      );
+
+      const filtered = results.filter((r) => r.ok);
+      // TODO: reduce routes to a set that touches no edge twice
+      const maxAmtIn = filtered.reduce((p, n) => p.add(n.maxAmtIn), ZERO);
+      const minAmtOut = filtered.reduce((p, n) => p.add(n.minAmtOut), ZERO);
+      const response = {
+        priceImpactLimit,
+        labels: filtered.map((r) => r.label),
+        maxInput: toUiDecimals(maxAmtIn, inputBank.mintDecimals),
+        minOutput: toUiDecimals(minAmtOut, outputBank.mintDecimals),
+      };
+      res.send(response);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send();
+    }
+  });
+
   app.get("/swap", async (req, res) => {
     try {
       const walletPk = new PublicKey(req.query.wallet as string);
@@ -571,10 +743,12 @@ async function main() {
       let ranked: SwapResult[] = [];
       if (mode === SwapMode.ExactIn) {
         ranked = filtered.sort((a, b) =>
-          b.minAmtOut.sub(a.minAmtOut).toNumber()
+          Number(b.minAmtOut.sub(a.minAmtOut).toString())
         );
       } else if (mode === SwapMode.ExactOut) {
-        ranked = filtered.sort((a, b) => a.maxAmtIn.sub(b.maxAmtIn).toNumber());
+        ranked = filtered.sort((a, b) =>
+          Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
+        );
       }
       const topN = ranked.slice(0, Math.min(ranked.length, maxRoutes));
 
@@ -583,7 +757,8 @@ async function main() {
           const instructions = await r.instructions(walletPk);
           let priceImpact: number | undefined = undefined;
           if (referencePrice) {
-            const actualPrice = r.maxAmtIn.toNumber() / r.minAmtOut.toNumber();
+            const actualPrice =
+              Number(r.maxAmtIn.toString()) / Number(r.minAmtOut.toString());
             priceImpact = actualPrice / referencePrice - 1;
           }
 
