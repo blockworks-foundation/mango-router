@@ -5,7 +5,8 @@
   "main": "out/index.js",
   "types": "out/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "start": "node ./out/index.js"
   },
   "devDependencies": {
     "@types/cors": "^2.8.13",
@@ -18,12 +19,15 @@
     "@orca-so/common-sdk": "^0.1.4",
     "@orca-so/whirlpools-sdk": "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main&scripts.postinstall=npm%20install%20--ignore-scripts%20--force%20%26%26%20npm%20run%20build",
     "@project-serum/anchor": "^0.26.0",
+    "@raydium-io/raydium-sdk": "^1.1.0-beta.55",
+    "@solana/spl-token": "^0.3.7",
     "@solana/web3.js": "^1.70.1",
     "@types/bn.js": "^5.1.1",
     "@types/node": "^18.11.18",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "express-prom-bundle": "^6.6.0",
+    "node-fetch": "^3.3.0",
     "prom-client": "^14.1.1"
   }
 }
