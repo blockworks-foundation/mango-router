@@ -153,16 +153,6 @@ interface Edge {
   ) => Promise<SwapResult>;
 }
 
-interface Route {
-  whirlpool: Map<string, Map<string, Edge[]>>;
-  raydium: Map<string, Map<string, Edge[]>>;
-}
-
-enum AMM {
-  WHIRLPOOL = "whirlpool",
-  RAYDIUM = "raydium",
-}
-
 class WhirlpoolEdge implements Edge {
   constructor(
     public label: string,
@@ -409,17 +399,14 @@ class RaydiumEdge implements Edge {
 class Router {
   whirlpoolClient: WhirlpoolClient;
   connection: Connection;
-  routes: Route;
+  routes: Map<string, Map<string, Edge[]>>;
 
   whirlpoolSub?: number;
 
   constructor(whirpoolClient: WhirlpoolClient, connection: Connection) {
     this.whirlpoolClient = whirpoolClient;
-    this.connection = connection
-    this.routes = {
-      whirlpool: new Map(),
-      raydium: new Map()
-    }
+    this.connection = connection;
+    this.routes = new Map();
   }
 
   async start(): Promise<void> {
@@ -454,14 +441,14 @@ class Router {
     }
   }
 
-  addEdge(edge: Edge, amm: AMM) {
+  addEdge(edge: Edge) {
     const mintA = edge.inputMint.toString();
     const mintB = edge.outputMint.toString();
-    if (!this.routes[amm].has(mintA)) {
-      this.routes[amm].set(mintA, new Map());
+    if (!this.routes.has(mintA)) {
+      this.routes.set(mintA, new Map());
     }
 
-    let routesFromA = this.routes[amm].get(mintA)!;
+    let routesFromA = this.routes.get(mintA)!;
     if (!routesFromA.has(mintB)) {
       routesFromA.set(mintB, []);
     }
@@ -470,9 +457,9 @@ class Router {
     routesFromAToB.push(edge);
   }
 
-  addEdges(edges: Edge[], amm: AMM) {
+  addEdges(edges: Edge[]) {
     for (const edge of edges) {
-      this.addEdge(edge, amm);
+      this.addEdge(edge);
     }
   }
 
@@ -556,9 +543,8 @@ class Router {
       "USD"
     );
 
-    this.routes.whirlpool = new Map();
     for (const pool of filtered) {
-      this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient), AMM.WHIRLPOOL);
+      this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
     }
   }
 
@@ -589,9 +575,8 @@ class Router {
       "USD"
     );
 
-    this.routes.raydium = new Map();
     for (const pool of filtered) {
-      this.addEdges(RaydiumEdge.pairFromPool(pool, this.connection), AMM.RAYDIUM);
+      this.addEdges(RaydiumEdge.pairFromPool(pool, this.connection));
     }
   }
 
@@ -600,13 +585,12 @@ class Router {
     outputMint: PublicKey,
     startAmount: BN,
     referencePrice: number,
-    priceImpactLimit: number,
-    amm: AMM
+    priceImpactLimit: number
   ): Promise<DepthResult[]> {
     let results: DepthResult[] = [];
 
     const A = inputMint.toString();
-    const fromA = this.routes[amm].get(A);
+    const fromA = this.routes.get(A);
     if (!fromA) return results;
 
     const Z = outputMint.toString();
@@ -650,7 +634,7 @@ class Router {
 
     // swap A->B->Z
     for (const [B, AtoB] of fromA.entries()) {
-      const fromB = this.routes[amm].get(B);
+      const fromB = this.routes.get(B);
       const BtoZ = fromB?.get(Z);
 
       if (!BtoZ) continue;
@@ -724,13 +708,12 @@ class Router {
     amount: BN,
     otherAmountThreshold: BN,
     mode: SwapMode,
-    slippage: number,
-    amm: AMM
+    slippage: number
   ): Promise<SwapResult[]> {
     let results: SwapResult[] = [];
 
     const A = inputMint.toString();
-    const fromA = this.routes[amm].get(A);
+    const fromA = this.routes.get(A);
     if (!fromA) return results;
 
     const Z = outputMint.toString();
@@ -746,7 +729,7 @@ class Router {
     }
 
     for (const [B, AtoB] of fromA.entries()) {
-      const fromB = this.routes[amm].get(B);
+      const fromB = this.routes.get(B);
       const BtoZ = fromB?.get(Z);
 
       if (!BtoZ) continue;
@@ -848,13 +831,6 @@ async function main() {
       const inputMint = new PublicKey(req.query.inputMint as string);
       const outputMint = new PublicKey(req.query.outputMint as string);
       const priceImpactLimit = Number(req.query.priceImpactLimit as string);
-      const amm = req.query.amm as AMM;
-
-      if (amm !== AMM.WHIRLPOOL && amm !== AMM.RAYDIUM) {
-        const error = { e: "amm needs to be one of whirlpool or raydium" };
-        res.status(404).send(error);
-        return;
-      }
 
       const inputBank = group.getFirstBankByMint(inputMint);
       const outputBank = group.getFirstBankByMint(outputMint);
@@ -876,8 +852,7 @@ async function main() {
         outputMint,
         startAmount,
         referencePrice,
-        priceImpactLimit,
-        amm
+        priceImpactLimit
       );
 
       const filtered = results.filter((r) => r.ok);
@@ -913,7 +888,6 @@ async function main() {
         ? ZERO
         : U64_MAX;
       let referencePrice: number;
-      const amm = req.query.amm as AMM;
 
       if (
         group.banksMapByMint.has(inputMint) &&
@@ -934,12 +908,6 @@ async function main() {
         return;
       }
 
-      if (amm !== AMM.WHIRLPOOL && amm !== AMM.RAYDIUM) {
-        const error = { e: "amm needs to be one of whirlpool or raydium" };
-        res.status(404).send(error);
-        return;
-      }
-
       console.log("Checking possible routes per your request...");
 
       const timerSwapDuration = metricSwapDuration.startTimer();
@@ -949,8 +917,7 @@ async function main() {
         amount,
         otherAmountThreshold,
         mode,
-        slippage,
-        amm
+        slippage
       );
       const swapDuration = timerSwapDuration();
       metricSwapDuration.observe(swapDuration);
@@ -1012,7 +979,7 @@ async function main() {
   });
   app.listen(port);
   metricsApp.listen(9091);
-  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001&amm=raydium
-  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001&amm=whirlpool
+  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001
+  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001
 }
 main();
