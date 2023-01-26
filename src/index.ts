@@ -17,6 +17,23 @@ import {
   WhirlpoolClient,
   WhirlpoolContext,
 } from "@orca-so/whirlpools-sdk";
+
+import {
+  LiquidityPoolKeysV4,
+  Liquidity,
+  Percent,
+  TokenAmount,
+  Token,
+  LiquidityPoolInfo, 
+} from "@raydium-io/raydium-sdk"
+
+import {
+  PairInfo,
+  fetchPoolKeys,
+  fetchAllPoolKeys,
+  fetchAllPairInfos
+} from './raydium-utils'
+
 import {
   AnchorProvider,
   Wallet,
@@ -34,6 +51,12 @@ import {
 } from "@solana/web3.js";
 import cors from "cors";
 import express from "express";
+
+const importDynamic = new Function('modulePath', 'return import(modulePath)');
+const fetch = async (...args:any[]) => {
+  const module = await importDynamic('node-fetch');
+  return module.default(...args);
+};
 
 const {
   CLUSTER,
@@ -247,19 +270,148 @@ class WhirlpoolEdge implements Edge {
   }
 }
 
+class RaydiumEdge implements Edge {
+  constructor(
+    public label: string,
+    public inputMint: PublicKey,
+    public inputDecimals: number,
+    public outputMint: PublicKey,
+    public outputDecimals: number,
+    public poolPk: LiquidityPoolKeysV4,
+    public poolInfo: LiquidityPoolInfo
+  ) {}
+
+  static pairFromPool(poolKey: LiquidityPoolKeysV4, poolInfo: LiquidityPoolInfo): Edge[] {
+    const frd = new RaydiumEdge(
+      poolKey.id.toString().slice(0, 6),
+      poolKey.baseMint,
+      poolKey.baseDecimals,
+      poolKey.quoteMint,
+      poolKey.quoteDecimals,
+      poolKey,
+      poolInfo
+    );
+    const brd = new RaydiumEdge(
+      poolKey.id.toString().slice(0, 6),
+      poolKey.quoteMint,
+      poolKey.quoteDecimals,
+      poolKey.baseMint,
+      poolKey.baseDecimals,
+      poolKey,
+      poolInfo
+    );
+    return [frd, brd];
+  } 
+
+  async swap(
+    amount: BN,
+    otherAmountThreshold: BN,
+    mode: SwapMode,
+    slippage: number
+  ): Promise<SwapResult> {
+    try {
+      const poolKeys = this.poolPk;
+      const poolInfo = this.poolInfo;
+      const slippageLimit = new Percent(slippage * 1e8, 1e8);
+      let ok: boolean = false;
+
+      let fee: BN = new BN(0);
+      let maxAmountIn: BN = new BN(0);
+      let minAmountOut: BN = new BN(0);
+      
+      if (mode === SwapMode.ExactIn) {
+        const currencyOut = new Token(this.outputMint, this.outputDecimals);
+        const amountIn = new TokenAmount(new Token(this.inputMint, this.inputDecimals), amount.toNumber() / (10 ** this.inputDecimals), false);
+        const amountOutComputedInfo = Liquidity.computeAmountOut({ poolKeys, poolInfo, amountIn, currencyOut, slippage: slippageLimit, });
+        fee = new BN(Number(amountOutComputedInfo.fee.toExact()) * (10 ** this.inputDecimals));
+        maxAmountIn = amount;
+        minAmountOut = new BN(Number(amountOutComputedInfo.minAmountOut.toExact()) * (10 ** this.outputDecimals));
+        ok = otherAmountThreshold.lte(minAmountOut);
+      } else {
+        const currencyIn = new Token(this.inputMint, this.inputDecimals);
+        const amountOut = new TokenAmount(new Token(this.outputMint, this.outputDecimals), amount.toNumber() / (10 ** this.outputDecimals), false);
+        const amountInComputedInfo = Liquidity.computeAmountIn({ poolKeys, poolInfo, amountOut, currencyIn, slippage: slippageLimit, });
+        maxAmountIn = new BN(Number(amountInComputedInfo.maxAmountIn.toExact()) * (10 ** this.inputDecimals));
+        minAmountOut = amount;
+        ok = otherAmountThreshold.gte(maxAmountIn);
+      }
+
+      let instructions = async (wallet: PublicKey) => {
+        if (!ok) {
+          return [];
+        }
+        const tokenAccountIn = await getAssociatedTokenAddress(this.inputMint, wallet);
+        const tokenAccountOut = await getAssociatedTokenAddress(this.outputMint, wallet);
+        const instruction = Liquidity.makeSwapInstruction({
+          poolKeys,
+          userKeys: {
+              tokenAccountIn,
+              tokenAccountOut,
+              owner: wallet,
+          },
+          amountIn: maxAmountIn,
+          amountOut: minAmountOut,
+          fixedSide: mode === SwapMode.ExactIn ? "in" : "out",
+        });
+        return [instruction];
+      };
+
+      return {
+        ok,
+        instructions,
+        label: this.poolPk.id.toString().slice(0, 6),
+        marketInfos: [
+          {
+            label: "Raydium",
+            fee: {
+              amount: fee,
+              mint: this.inputMint,
+              rate: 0.25 * 1e-2,
+            },
+          },
+        ],
+        maxAmtIn: maxAmountIn,
+        minAmtOut: minAmountOut,
+        mints: [this.inputMint, this.outputMint],
+      };
+    } catch (e) {
+      // console.log(
+      //   "could not swap",
+      //   this.poolPk.toString().slice(0, 6),
+      //   this.inputMint.toString().slice(0, 6),
+      //   this.outputMint.toString().slice(0, 6),
+      //   amount.toNumber(),
+      //   otherAmountThreshold.toNumber()
+      // );
+      return {
+        ok: false,
+        label: "",
+        marketInfos: [],
+        maxAmtIn: amount,
+        minAmtOut: otherAmountThreshold,
+        mints: [this.inputMint, this.outputMint],
+        instructions: async () => [],
+      };
+    }
+  }
+}
+
 class Router {
   whirlpoolClient: WhirlpoolClient;
+  connection: Connection;
   routes: Map<string, Map<string, Edge[]>>;
 
   whirlpoolSub?: number;
 
-  constructor(whirpoolClient: WhirlpoolClient) {
+  constructor(whirpoolClient: WhirlpoolClient, connection: Connection) {
     this.whirlpoolClient = whirpoolClient;
+    this.connection = connection;
     this.routes = new Map();
   }
 
   async start(): Promise<void> {
     await this.indexWhirpools();
+    await this.indexRaydium();
 
     // setup a websocket connection to refresh all whirpool program accounts
     const idl = this.whirlpoolClient.getContext().program.idl;
@@ -312,6 +464,7 @@ class Router {
   }
 
   async indexWhirpools(): Promise<void> {
+    console.log("fetch all pools from Whirlpool...");
     const poolsPks = (
       await this.whirlpoolClient.getContext().program.account.whirlpool.all()
     ).map((p) => p.publicKey);
@@ -381,7 +534,7 @@ class Router {
     });
 
     console.log(
-      "found",
+      "Whirlpool: found",
       poolsPks.length,
       "pools.",
       filtered.length,
@@ -390,9 +543,48 @@ class Router {
       "USD"
     );
 
-    this.routes = new Map();
     for (const pool of filtered) {
       this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
+    }
+  }
+
+  async indexRaydium(): Promise<void> {
+    console.log("fetch all pools from Raydium...");
+    const pools = await fetchAllPoolKeys();
+    const connection = this.connection;
+    const poolInfos = await Liquidity.fetchMultipleInfo({connection, pools});
+
+    const raydiumPools = {
+      pools: pools,
+      poolInfos: poolInfos
+    }
+    
+    const pairs = await fetchAllPairInfos();
+
+    const filtered: {pools: LiquidityPoolKeysV4, poolInfos: LiquidityPoolInfo}[] = [];
+
+    for(var i=0;i<raydiumPools.pools.length;i++) {
+      const pair = pairs.find((t: PairInfo) => {return new PublicKey(t.ammId).equals(raydiumPools.pools[i].id)});
+      if(pair && pair.liquidity > minTvl) {
+        filtered.push({
+          pools: raydiumPools.pools[i],
+          poolInfos: raydiumPools.poolInfos[i]
+        })
+      }
+    }
+
+    console.log(
+      "Raydium: found",
+      pools.length,
+      "pools.",
+      filtered.length,
+      "of those with TVL >",
+      minTvl,
+      "USD"
+    );
+
+    for (const pool of filtered) {
+      this.addEdges(RaydiumEdge.pairFromPool(pool.pools, pool.poolInfos));
     }
   }
 
@@ -596,7 +788,6 @@ async function main() {
     new Wallet(Keypair.generate()),
     {}
   );
-
   // init mango
   const mangoClient = await MangoClient.connect(
     anchorProvider,
@@ -608,7 +799,6 @@ async function main() {
   );
   const group = await mangoClient.getGroup(groupPk);
   await group.reloadAll(mangoClient);
-
   const banks = Array.from(group.banksMapByMint, ([, value]) => value);
   const coder = new BorshAccountsCoder(mangoClient.program.idl);
   const subs = banks.map(([bank]) =>
@@ -632,14 +822,13 @@ async function main() {
       "processed"
     )
   );
-
   // init orca
-  const whirpoolClient = buildWhirlpoolClient(
+  const whirlpoolClient = buildWhirlpoolClient(
     WhirlpoolContext.withProvider(anchorProvider, ORCA_WHIRLPOOL_PROGRAM_ID)
   );
 
   // init router
-  const router = new Router(whirpoolClient);
+  const router = new Router(whirlpoolClient, connection);
   await router.start();
 
   const app = express();
@@ -707,6 +896,7 @@ async function main() {
         ? ZERO
         : U64_MAX;
       let referencePrice: number;
+
       if (
         group.banksMapByMint.has(inputMint) &&
         group.banksMapByMint.has(outputMint)
@@ -726,6 +916,8 @@ async function main() {
         return;
       }
 
+      console.log("Checking possible routes per your request...");
+
       const timerSwapDuration = metricSwapDuration.startTimer();
       const results = await router.swap(
         inputMintPk,
@@ -738,7 +930,6 @@ async function main() {
       const swapDuration = timerSwapDuration();
       metricSwapDuration.observe(swapDuration);
       console.log("swap", swapDuration);
-
       const filtered = results.filter((r) => r.ok);
       let ranked: SwapResult[] = [];
       if (mode === SwapMode.ExactIn) {
@@ -796,7 +987,7 @@ async function main() {
   });
   app.listen(port);
   metricsApp.listen(9091);
-  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=7000000000&slippage=0.001
-  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactOut&amount=7000000000&otherAmountThreshold=100000000&slippage=0.001
+  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001
+  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=4000000000&slippage=0.001
 }
 main();
