@@ -23,7 +23,8 @@ import {
   Liquidity,
   Percent,
   TokenAmount,
-  Token, 
+  Token,
+  LiquidityPoolInfo, 
 } from "@raydium-io/raydium-sdk"
 
 import {
@@ -276,19 +277,19 @@ class RaydiumEdge implements Edge {
     public inputDecimals: number,
     public outputMint: PublicKey,
     public outputDecimals: number,
-    public poolPk: PublicKey,
-    public connection: Connection
+    public poolPk: LiquidityPoolKeysV4,
+    public poolInfo: LiquidityPoolInfo
   ) {}
 
-  static pairFromPool(poolKey: LiquidityPoolKeysV4, connection: Connection): Edge[] {
+  static pairFromPool(poolKey: LiquidityPoolKeysV4, poolInfo: LiquidityPoolInfo): Edge[] {
     const frd = new RaydiumEdge(
       poolKey.id.toString().slice(0, 6),
       poolKey.baseMint,
       poolKey.baseDecimals,
       poolKey.quoteMint,
       poolKey.quoteDecimals,
-      poolKey.id,
-      connection
+      poolKey,
+      poolInfo
     );
     const brd = new RaydiumEdge(
       poolKey.id.toString().slice(0, 6),
@@ -296,8 +297,8 @@ class RaydiumEdge implements Edge {
       poolKey.quoteDecimals,
       poolKey.baseMint,
       poolKey.baseDecimals,
-      poolKey.id,
-      connection
+      poolKey,
+      poolInfo
     );
     return [frd, brd];
   } 
@@ -309,9 +310,8 @@ class RaydiumEdge implements Edge {
     slippage: number
   ): Promise<SwapResult> {
     try {
-      const connection = this.connection;
-      const poolKeys = await fetchPoolKeys(connection, this.poolPk);
-      const poolInfo = await Liquidity.fetchInfo({connection, poolKeys});
+      const poolKeys = this.poolPk;
+      const poolInfo = this.poolInfo;
       const slippageLimit = new Percent(slippage * 1e8, 1e8);
       let ok: boolean = false;
 
@@ -342,7 +342,7 @@ class RaydiumEdge implements Edge {
         }
         const tokenAccountIn = await getAssociatedTokenAddress(this.inputMint, wallet);
         const tokenAccountOut = await getAssociatedTokenAddress(this.outputMint, wallet);
-        const instruction = await Liquidity.makeSwapInstruction({
+        const instruction = Liquidity.makeSwapInstruction({
           poolKeys,
           userKeys: {
               tokenAccountIn,
@@ -359,7 +359,7 @@ class RaydiumEdge implements Edge {
       return {
         ok,
         instructions,
-        label: this.poolPk.toString().slice(0, 6),
+        label: this.poolPk.id.toString().slice(0, 6),
         marketInfos: [
           {
             label: "Raydium",
@@ -551,19 +551,27 @@ class Router {
   async indexRaydium(): Promise<void> {
     console.log("fetch all pools from Raydium...");
     const pools = await fetchAllPoolKeys();
+    const connection = this.connection;
+    const poolInfos = await Liquidity.fetchMultipleInfo({connection, pools});
+
+    const raydiumPools = {
+      pools: pools,
+      poolInfos: poolInfos
+    }
     
     const pairs = await fetchAllPairInfos();
-    const filtered = pools.filter((p) => {
-      const pair = pairs.find((t: PairInfo) => {return new PublicKey(t.ammId).equals(p.id)});
-      if(!pair) {
-        return false;
+
+    const filtered: {pools: LiquidityPoolKeysV4, poolInfos: LiquidityPoolInfo}[] = [];
+
+    for(var i=0;i<raydiumPools.pools.length;i++) {
+      const pair = pairs.find((t: PairInfo) => {return new PublicKey(t.ammId).equals(raydiumPools.pools[i].id)});
+      if(pair && pair.liquidity > minTvl) {
+        filtered.push({
+          pools: raydiumPools.pools[i],
+          poolInfos: raydiumPools.poolInfos[i]
+        })
       }
-      const tvl = pair.liquidity;
-      if (tvl <= minTvl) {
-        return false;
-      }
-      return true;
-    });
+    }
 
     console.log(
       "Raydium: found",
@@ -576,7 +584,7 @@ class Router {
     );
 
     for (const pool of filtered) {
-      this.addEdges(RaydiumEdge.pairFromPool(pool, this.connection));
+      this.addEdges(RaydiumEdge.pairFromPool(pool.pools, pool.poolInfos));
     }
   }
 
