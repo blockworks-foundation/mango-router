@@ -1,9 +1,9 @@
 import fetch from "cross-fetch";
 import { Configuration, DefaultApi } from "@jup-ag/api";
 
-async function quoteBid(usdAmount: number) {
+async function quoteBid(usdAmount: number, usdMint: string) {
   const response = await fetch(
-    `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=${
+    `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=${usdMint}&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=${
       usdAmount * 1000000
     }&slippage=0.1`
   );
@@ -15,9 +15,9 @@ async function quoteBid(usdAmount: number) {
   }
 }
 
-async function quoteAsk(usdAmount: number) {
+async function quoteAsk(usdAmount: number, usdMint: string) {
   const response = await fetch(
-    `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=So11111111111111111111111111111111111111112&outputMint=Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB&mode=ExactOut&amount=${
+    `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=So11111111111111111111111111111111111111112&outputMint=${usdMint}&mode=ExactOut&amount=${
       usdAmount * 1000000
     }&slippage=0.1`
   );
@@ -35,10 +35,10 @@ const config = new Configuration({
 });
 const jupiterQuoteApi = new DefaultApi(config);
 
-async function quoteJupBid(usdAmount: number) {
+async function quoteJupBid(usdAmount: number, usdMint: string) {
   try {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
-      inputMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+      inputMint: usdMint,
       outputMint: "So11111111111111111111111111111111111111112",
       amount: `${usdAmount * 1000000}`,
     });
@@ -48,11 +48,11 @@ async function quoteJupBid(usdAmount: number) {
   }
 }
 
-async function quoteJupAsk(usdAmount: number) {
+async function quoteJupAsk(usdAmount: number, usdMint: string) {
   try {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
       inputMint: "So11111111111111111111111111111111111111112",
-      outputMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+      outputMint: usdMint,
       amount: `${usdAmount * 1000000}`,
       swapMode: "ExactOut" as any,
     });
@@ -66,20 +66,23 @@ async function main() {
   // run every second
   setTimeout(main, 1000);
 
+  // const usdMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const usdMint = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+
   const ts = Date.now();
   const quotes = await Promise.all([
-    quoteBid(1000),
-    quoteBid(4000),
-    quoteBid(10000),
-    quoteJupBid(1000),
-    quoteJupBid(4000),
-    quoteJupBid(10000),
-    quoteAsk(1000),
-    quoteAsk(4000),
-    quoteAsk(10000),
-    quoteJupAsk(1000),
-    quoteJupAsk(4000),
-    quoteJupAsk(10000),
+    quoteBid(1000, usdMint),
+    quoteBid(4000, usdMint),
+    quoteBid(10000, usdMint),
+    quoteJupBid(1000, usdMint),
+    quoteJupBid(4000, usdMint),
+    quoteJupBid(10000, usdMint),
+    quoteAsk(1000, usdMint),
+    quoteAsk(4000, usdMint),
+    quoteAsk(10000, usdMint),
+    quoteJupAsk(1000, usdMint),
+    quoteJupAsk(4000, usdMint),
+    quoteJupAsk(10000, usdMint),
   ]);
 
   console.log([ts, ...quotes].join(","));
