@@ -7,12 +7,12 @@ import BN from "bn.js";
 async function quoteBid(usdAmount: number, usdMint: string) {
   const response = await fetch(
     `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=${usdMint}&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=${
-      usdAmount * 1000000
+      usdAmount * 1_000_000
     }&slippage=0.1`
   );
   const json: any = await response.json();
   if (json[0]) {
-    return 1000000000000 / json[0]["outAmount"];
+    return (usdAmount * 1_000_000_000) / json[0]["outAmount"];
   } else {
     return 0;
   }
@@ -21,12 +21,12 @@ async function quoteBid(usdAmount: number, usdMint: string) {
 async function quoteAsk(usdAmount: number, usdMint: string) {
   const response = await fetch(
     `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=So11111111111111111111111111111111111111112&outputMint=${usdMint}&mode=ExactOut&amount=${
-      usdAmount * 1000000
+      usdAmount * 1_000_000
     }&slippage=0.1`
   );
   const json: any = await response.json();
   if (json[0]) {
-    return 1000000000000 / json[0]["inAmount"];
+    return (usdAmount * 1_000_000_000) / json[0]["inAmount"];
   } else {
     return 0;
   }
@@ -43,9 +43,9 @@ async function quoteJupBid(usdAmount: number, usdMint: string) {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
       inputMint: usdMint,
       outputMint: "So11111111111111111111111111111111111111112",
-      amount: `${usdAmount * 1000000}`,
+      amount: `${usdAmount * 1_000_000}`,
     });
-    return 1000000000000 / quote.data[0]["outAmount"];
+    return (usdAmount * 1_000_000_000) / quote.data[0]["outAmount"];
   } catch (e) {
     return 0;
   }
@@ -56,10 +56,10 @@ async function quoteJupAsk(usdAmount: number, usdMint: string) {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
       inputMint: "So11111111111111111111111111111111111111112",
       outputMint: usdMint,
-      amount: `${usdAmount * 1000000}`,
+      amount: `${usdAmount * 1_000_000}`,
       swapMode: "ExactOut" as any,
     });
-    return 1000000000000 / quote.data[0]["inAmount"];
+    return (usdAmount * 1_000_000_000) / quote.data[0]["inAmount"];
   } catch (e) {
     return 0;
   }
