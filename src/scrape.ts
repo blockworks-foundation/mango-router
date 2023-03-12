@@ -1,5 +1,8 @@
 import fetch from "cross-fetch";
 import { Configuration, DefaultApi } from "@jup-ag/api";
+import { Market, Orderbook } from "@project-serum/serum";
+import { Connection, PublicKey } from "@solana/web3.js";
+import BN from "bn.js";
 
 async function quoteBid(usdAmount: number, usdMint: string) {
   const response = await fetch(
@@ -62,30 +65,97 @@ async function quoteJupAsk(usdAmount: number, usdMint: string) {
   }
 }
 
-async function main() {
+let openbookBids: [number, number, BN, BN][] = [];
+let openbookAsks: [number, number, BN, BN][] = [];
+
+async function subscribeOB() {
+  let connection = new Connection(process.env.RPC_URL!);
+  let marketAddress = new PublicKey(
+    "8BnEgHoWFysVcuFFX7QztDmzuH8r5ZFvyP3sYwn1XTh6"
+  );
+  let programAddress = new PublicKey(
+    "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX"
+  );
+  let market = await Market.load(connection, marketAddress, {}, programAddress);
+  connection.onAccountChange(market.asksAddress, (info) => {
+    openbookAsks = Orderbook.decode(market, info.data).getL2(20);
+  });
+  connection.onAccountChange(market.bidsAddress, (info) => {
+    openbookBids = Orderbook.decode(market, info.data).getL2(20);
+  });
+}
+
+function quoteOBBid(usdAmount: number) {
+  let matchedSize = 0;
+  let usdRemaining = usdAmount + 0;
+  let index = 0;
+  while (usdRemaining > 0) {
+    let top = openbookBids[index++];
+    if (!top) return 0;
+
+    const [price, size] = top;
+    matchedSize += Math.min(usdRemaining / price, size);
+
+    usdRemaining -= price * size;
+  }
+
+  return usdAmount / matchedSize;
+}
+
+function quoteOBAsk(usdAmount: number) {
+  let matchedSize = 0;
+  let usdRemaining = usdAmount + 0;
+  let index = 0;
+  while (usdRemaining > 0) {
+    let top = openbookAsks[index++];
+    if (!top) return 0;
+
+    const [price, size] = top;
+    matchedSize += Math.min(usdRemaining / price, size);
+
+    usdRemaining -= price * size;
+  }
+
+  return usdAmount / matchedSize;
+}
+
+async function main(subscribe: any) {
   // run every second
   setTimeout(main, 1000);
 
-  // const usdMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-  const usdMint = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+  if (subscribe) {
+    await subscribeOB();
+  }
+
+  const usdMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  // const usdMint = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
   const ts = Date.now();
   const quotes = await Promise.all([
-    quoteBid(1000, usdMint),
-    quoteBid(4000, usdMint),
-    quoteBid(10000, usdMint),
-    quoteJupBid(1000, usdMint),
-    quoteJupBid(4000, usdMint),
-    quoteJupBid(10000, usdMint),
-    quoteAsk(1000, usdMint),
-    quoteAsk(4000, usdMint),
-    quoteAsk(10000, usdMint),
-    quoteJupAsk(1000, usdMint),
-    quoteJupAsk(4000, usdMint),
-    quoteJupAsk(10000, usdMint),
+    quoteBid(100, usdMint),
+    quoteBid(400, usdMint),
+    quoteBid(2000, usdMint),
+    quoteJupBid(100, usdMint),
+    quoteJupBid(400, usdMint),
+    quoteJupBid(2000, usdMint),
+    quoteAsk(100, usdMint),
+    quoteAsk(400, usdMint),
+    quoteAsk(2000, usdMint),
+    quoteJupAsk(100, usdMint),
+    quoteJupAsk(400, usdMint),
+    quoteJupAsk(2000, usdMint),
   ]);
 
-  console.log([ts, ...quotes].join(","));
+  const obQuotes = [
+    quoteOBBid(100),
+    quoteOBBid(400),
+    quoteOBBid(2000),
+    quoteOBAsk(100),
+    quoteOBAsk(400),
+    quoteOBAsk(2000),
+  ];
+
+  console.log([ts, ...quotes, ...obQuotes].join(","));
 }
 
-main();
+main(true);
