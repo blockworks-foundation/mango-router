@@ -4,7 +4,7 @@ import { Market, Orderbook } from "@project-serum/serum";
 import { Connection, PublicKey } from "@solana/web3.js";
 import BN from "bn.js";
 
-async function quoteBid(usdAmount: number, usdMint: string) {
+async function quoteAsk(usdAmount: number, usdMint: string) {
   const response = await fetch(
     `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=${usdMint}&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=${
       usdAmount * 1_000_000
@@ -18,7 +18,7 @@ async function quoteBid(usdAmount: number, usdMint: string) {
   }
 }
 
-async function quoteAsk(usdAmount: number, usdMint: string) {
+async function quoteBid(usdAmount: number, usdMint: string) {
   const response = await fetch(
     `https://api.mngo.cloud/router/v1/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=So11111111111111111111111111111111111111112&outputMint=${usdMint}&mode=ExactOut&amount=${
       usdAmount * 1_000_000
@@ -38,7 +38,7 @@ const config = new Configuration({
 });
 const jupiterQuoteApi = new DefaultApi(config);
 
-async function quoteJupBid(usdAmount: number, usdMint: string) {
+async function quoteJupAsk(usdAmount: number, usdMint: string) {
   try {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
       inputMint: usdMint,
@@ -51,7 +51,7 @@ async function quoteJupBid(usdAmount: number, usdMint: string) {
   }
 }
 
-async function quoteJupAsk(usdAmount: number, usdMint: string) {
+async function quoteJupBid(usdAmount: number, usdMint: string) {
   try {
     const quote: any = await jupiterQuoteApi.v4QuoteGet({
       inputMint: "So11111111111111111111111111111111111111112",
