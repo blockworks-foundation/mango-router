@@ -119,6 +119,8 @@ function quoteOBAsk(usdAmount: number) {
   return usdAmount / matchedSize;
 }
 
+
+const SIZE = [1000, 4000, 10000];
 async function main(subscribe: any) {
   // run every second
   setTimeout(main, 1000);
@@ -132,27 +134,27 @@ async function main(subscribe: any) {
 
   const ts = Date.now();
   const quotes = await Promise.all([
-    quoteBid(100, usdMint),
-    quoteBid(400, usdMint),
-    quoteBid(2000, usdMint),
-    quoteJupBid(100, usdMint),
-    quoteJupBid(400, usdMint),
-    quoteJupBid(2000, usdMint),
-    quoteAsk(100, usdMint),
-    quoteAsk(400, usdMint),
-    quoteAsk(2000, usdMint),
-    quoteJupAsk(100, usdMint),
-    quoteJupAsk(400, usdMint),
-    quoteJupAsk(2000, usdMint),
+    quoteBid(SIZE[0], usdMint),
+    quoteBid(SIZE[1], usdMint),
+    quoteBid(SIZE[2], usdMint),
+    quoteJupBid(SIZE[0], usdMint),
+    quoteJupBid(SIZE[1], usdMint),
+    quoteJupBid(SIZE[2], usdMint),
+    quoteAsk(SIZE[0], usdMint),
+    quoteAsk(SIZE[1], usdMint),
+    quoteAsk(SIZE[2], usdMint),
+    quoteJupAsk(SIZE[0], usdMint),
+    quoteJupAsk(SIZE[1], usdMint),
+    quoteJupAsk(SIZE[2], usdMint),
   ]);
 
   const obQuotes = [
-    quoteOBBid(100),
-    quoteOBBid(400),
-    quoteOBBid(2000),
-    quoteOBAsk(100),
-    quoteOBAsk(400),
-    quoteOBAsk(2000),
+    quoteOBBid(SIZE[0]),
+    quoteOBBid(SIZE[1]),
+    quoteOBBid(SIZE[2]),
+    quoteOBAsk(SIZE[0]),
+    quoteOBAsk(SIZE[1]),
+    quoteOBAsk(SIZE[2]),
   ];
 
   console.log([ts, ...quotes, ...obQuotes].join(","));
