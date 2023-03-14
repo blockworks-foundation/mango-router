@@ -504,14 +504,80 @@ class Router {
             inAmount = inAmount.muln(2 ** 0.5);
           }
 
-          // console.log(
-          //   "depth",
-          //   B,
-          //   bestResult.label,
-          //   bestResult.ok,
-          //   bestResult.maxAmtIn.toString()
-          // );
           results.push(bestResult);
+        }
+      }
+    }
+
+    // swap A->B->C->Z
+    for (const [B, AtoB] of fromA.entries()) {
+      const fromB = this.routes.get(B)!;
+      for (const [C, BtoC] of fromB.entries()) {
+        const fromC = this.routes.get(C)!;
+        const CtoZ = fromC?.get(Z);
+
+        if (!CtoZ) continue;
+
+        // swap A->B->Z amt=IN oth=OUT
+        for (const eAB of AtoB) {
+          for (const eBC of BtoC) {
+            for (const eCZ of CtoZ) {
+              let bestResult = {
+                label: `${eAB.label}_${eBC.label}_${eCZ.label}`,
+                maxAmtIn: ZERO,
+                minAmtOut: ZERO,
+                ok: false,
+              };
+              let inAmount = startAmount;
+
+              while (inAmount.lt(U64_MAX)) {
+                let outAmountThreshold = inAmount
+                  .divn(referencePrice)
+                  .muln(1 - priceImpactLimit);
+                const firstHop = await eAB.swap(
+                  inAmount,
+                  ZERO,
+                  SwapMode.ExactIn,
+                  0
+                );
+                const secondHop = await eBC.swap(
+                  firstHop.minAmtOut,
+                  ZERO,
+                  SwapMode.ExactIn,
+                  0
+                );
+                const thirdHop = await eCZ.swap(
+                  secondHop.minAmtOut,
+                  outAmountThreshold,
+                  SwapMode.ExactIn,
+                  0
+                );
+
+                let actualPrice =
+                  Number(firstHop.maxAmtIn.toString()) /
+                  Number(thirdHop.minAmtOut.toString());
+                let priceImpact = actualPrice / referencePrice - 1;
+
+                if (
+                  !firstHop.ok ||
+                  !secondHop.ok ||
+                  !thirdHop.ok ||
+                  priceImpact >= priceImpactLimit
+                )
+                  break;
+
+                bestResult = {
+                  label: `${firstHop.label}_${secondHop.label}_${thirdHop.label}`,
+                  maxAmtIn: firstHop.maxAmtIn,
+                  minAmtOut: thirdHop.minAmtOut,
+                  ok: true,
+                };
+                inAmount = inAmount.muln(2 ** 0.5);
+              }
+
+              results.push(bestResult);
+            }
+          }
         }
       }
     }
