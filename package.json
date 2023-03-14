@@ -14,9 +14,9 @@
     "typescript": "^4.9.4"
   },
   "dependencies": {
-    "@blockworks-foundation/mango-v4": "https://github.com/blockworks-foundation/mango-v4.git#main",
-    "@orca-so/common-sdk": "^0.1.4",
-    "@orca-so/whirlpools-sdk": "https://gitpkg.now.sh/mschneider/whirlpools/sdk?main&scripts.postinstall=npm%20install%20--ignore-scripts%20--force%20%26%26%20npm%20run%20build",
+    "@blockworks-foundation/mango-v4": "^0.9.5",
+    "@orca-so/common-sdk": "^0.1.12",
+    "@orca-so/whirlpools-sdk": "^0.8.2",
     "@project-serum/anchor": "^0.26.0",
     "@solana/web3.js": "^1.70.1",
     "@types/bn.js": "^5.1.1",
