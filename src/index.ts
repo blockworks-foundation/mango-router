@@ -141,15 +141,16 @@ class WhirlpoolEdge implements Edge {
   ) {}
 
   static pairFromPool(pool: Whirlpool, client: WhirlpoolClient): Edge[] {
+    const label = pool.getAddress().toString();
     const fwd = new WhirlpoolEdge(
-      pool.getAddress().toString().slice(0, 6),
+      label,
       pool.getTokenAInfo().mint,
       pool.getTokenBInfo().mint,
       pool.getAddress(),
       client
     );
     const bwd = new WhirlpoolEdge(
-      pool.getAddress().toString().slice(0, 6),
+      label,
       pool.getTokenBInfo().mint,
       pool.getTokenAInfo().mint,
       pool.getAddress(),
@@ -210,7 +211,7 @@ class WhirlpoolEdge implements Edge {
       return {
         ok,
         instructions,
-        label: this.poolPk.toString().slice(0, 6),
+        label: this.poolPk.toString(),
         marketInfos: [
           {
             label: "Whirlpool",
@@ -675,12 +676,25 @@ async function main() {
       );
 
       const filtered = results.filter((r) => r.ok);
-      // TODO: reduce routes to a set that touches no edge twice
-      const maxAmtIn = filtered.reduce((p, n) => p.add(n.maxAmtIn), ZERO);
-      const minAmtOut = filtered.reduce((p, n) => p.add(n.minAmtOut), ZERO);
+      filtered.sort((a, b) => b.maxAmtIn.toNumber() - a.maxAmtIn.toNumber());
+
+      // greedy pruning to ensure no edge is touched twice
+      let pruned: DepthResult[] = [];
+      let usedPools = new Set<string>();
+      filtered.forEach((r) => {
+        let pools = r.label.split("_");
+        let includesUsedPool = pools.find((p) => usedPools.has(p));
+        if (!includesUsedPool) {
+          pruned.push(r);
+          pools.forEach((p) => usedPools.add(p));
+        }
+      });
+
+      const maxAmtIn = pruned.reduce((p, n) => p.add(n.maxAmtIn), ZERO);
+      const minAmtOut = pruned.reduce((p, n) => p.add(n.minAmtOut), ZERO);
       const response = {
         priceImpactLimit,
-        labels: filtered.map((r) => r.label),
+        labels: pruned.map((r) => r.label),
         maxInput: toUiDecimals(maxAmtIn, inputBank.mintDecimals),
         minOutput: toUiDecimals(minAmtOut, outputBank.mintDecimals),
       };
@@ -796,7 +810,7 @@ async function main() {
   });
   app.listen(port);
   metricsApp.listen(9091);
-  // TEST1: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&otherAmountThreshold=7000000000&slippage=0.001
-  // TEST2: http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactOut&amount=7000000000&otherAmountThreshold=100000000&slippage=0.001
+  // TEST swap: curl 'http://localhost:5000/swap?wallet=Bz9thGbRRfwq3EFtFtSKZYnnXio5LXDaRgJDh3NrMAGT&inputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&outputMint=So11111111111111111111111111111111111111112&mode=ExactIn&amount=100000000&slippage=0.001' | jq
+  // TEST depth: curl 'http://localhost:5000/depth?inputMint=So11111111111111111111111111111111111111112&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&priceImpactLimit=0.01' | jq
 }
 main();
