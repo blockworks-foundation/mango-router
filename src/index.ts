@@ -13,9 +13,11 @@ import {
   SwapQuote,
   swapQuoteByInputToken,
   swapQuoteByOutputToken,
+  SwapUtils,
   Whirlpool,
   WhirlpoolClient,
   WhirlpoolContext,
+  WhirlpoolIx,
 } from "@orca-so/whirlpools-sdk";
 import {
   AnchorProvider,
@@ -205,7 +207,18 @@ class WhirlpoolEdge implements Edge {
           this.outputMint,
           wallet
         );
-        return [await pool.getSwapIx(quote!, tokenIn, tokenOut, wallet)];
+        let swapIx = WhirlpoolIx.swapIx(
+          this.client.getContext().program,
+          SwapUtils.getSwapParamsFromQuote(
+            quote!,
+            this.client.getContext(),
+            pool,
+            tokenIn,
+            tokenOut,
+            wallet
+          )
+        );
+        return swapIx.instructions;
       };
       return {
         ok,
