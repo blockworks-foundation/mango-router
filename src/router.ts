@@ -16,10 +16,10 @@ import {
   swapQuoteByOutputToken,
 } from "@orca-so/whirlpools-sdk";
 import { AnchorProvider, BorshAccountsCoder, Idl } from "@project-serum/anchor";
-import { AmmV3, AmmV3PoolInfo, ApiAmmV3PoolsItem, MAINNET_PROGRAM_ID, PoolInfoLayout, PoolUtils, ReturnTypeComputeAmountOut, ReturnTypeComputeAmountOutBaseOut, ReturnTypeFetchMultipleMintInfos, ReturnTypeFetchMultiplePoolInfos, ReturnTypeFetchMultiplePoolTickArrays, SqrtPriceMath, TickArray, TickArrayLayout, fetchMultipleMintInfos } from "@raydium-io/raydium-sdk";
+import { AmmV3, AmmV3PoolInfo, ApiAmmV3PoolsItem, MAINNET_PROGRAM_ID, PoolInfoLayout, ReturnTypeComputeAmountOut, ReturnTypeComputeAmountOutBaseOut, ReturnTypeFetchMultipleMintInfos, ReturnTypeFetchMultiplePoolInfos, ReturnTypeFetchMultiplePoolTickArrays, SqrtPriceMath, fetchMultipleMintInfos } from "@raydium-io/raydium-sdk";
 import { Connection, EpochInfo, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
-import { sha256 } from "js-sha256";
 import bs58 from 'bs58';
 
 
@@ -242,6 +242,7 @@ class RaydiumEdge implements Edge {
       let fee: BN;
       let maxAmtIn: BN;
       let minAmtOut: BN;
+      let feeRate: number;
 
       if (mode === SwapMode.ExactIn) {
         let amountOut: ReturnTypeComputeAmountOut = AmmV3.computeAmountOut(
@@ -258,6 +259,7 @@ class RaydiumEdge implements Edge {
         ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
+        feeRate = fee.div(maxAmtIn).toNumber();
         minAmtOut = amountOut.minAmountOut.amount;
       } else {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = AmmV3.computeAmountIn(
@@ -274,6 +276,7 @@ class RaydiumEdge implements Edge {
         ok = otherAmountThreshold.lte(amountIn.amountIn.amount);
         fee = amountIn.fee;
         maxAmtIn = amountIn.maxAmountIn.amount;
+        feeRate = fee.div(maxAmtIn).toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
       }
 
@@ -310,7 +313,7 @@ class RaydiumEdge implements Edge {
             fee: {
               amount: fee,
               mint: this.inputMint,
-              rate: 0, // TODO: Fix this
+              rate: feeRate,
             },
           },
         ],
@@ -398,7 +401,7 @@ export class Router {
 
     // Only the poolInfo is worth updating. tickArray and mintInfos should not change.
     const poolInfoDiscriminator = Buffer.from(
-      sha256.digest("account:PoolState")
+      sha256("account:PoolState")
     ).slice(0, 8);
     this.raydiumPoolInfoSub = this.connection.onProgramAccountChange(
       MAINNET_PROGRAM_ID.CLMM,
@@ -487,13 +490,22 @@ export class Router {
       method: 'GET'
     });
     const poolData = (await response.json()).data as ApiAmmV3PoolsItem[];
-    console.log('Found', poolData.length, 'raydium pools');
 
     // TODO: Do not trust the tvl and instead look it up like with jupiter prices
     const poolsFilteredByTvl = poolData.filter((p: ApiAmmV3PoolsItem) => {
       return p.tvl > this.minTvl;
     });
-    console.log('Found', poolsFilteredByTvl.length, 'raydium pools with enough tvl');
+    console.log(
+      "found",
+      poolData.length,
+      "raydium pools.",
+      poolsFilteredByTvl.length,
+      "of those with TVL >",
+      this.minTvl,
+      "USD"
+    );
+
+    this.routes = new Map();
 
     const poolInfos = await AmmV3.fetchMultiplePoolInfos(
       {
@@ -605,7 +617,7 @@ export class Router {
     console.log(
       "found",
       poolsPks.length,
-      "pools.",
+      "orca pools.",
       filtered.length,
       "of those with TVL >",
       this.minTvl,
