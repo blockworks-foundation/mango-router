@@ -259,7 +259,7 @@ class RaydiumEdge implements Edge {
         ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
-        feeRate = fee.div(maxAmtIn).toNumber();
+        feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountOut.minAmountOut.amount;
       } else {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = AmmV3.computeAmountIn(
@@ -276,7 +276,7 @@ class RaydiumEdge implements Edge {
         ok = otherAmountThreshold.lte(amountIn.amountIn.amount);
         fee = amountIn.fee;
         maxAmtIn = amountIn.maxAmountIn.amount;
-        feeRate = fee.div(maxAmtIn).toNumber();
+        feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
       }
 
