@@ -16,8 +16,12 @@ import {
   swapQuoteByOutputToken,
 } from "@orca-so/whirlpools-sdk";
 import { AnchorProvider, BorshAccountsCoder, Idl } from "@project-serum/anchor";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { AmmV3, AmmV3PoolInfo, ApiAmmV3PoolsItem, MAINNET_PROGRAM_ID, PoolInfoLayout, ReturnTypeComputeAmountOut, ReturnTypeComputeAmountOutBaseOut, ReturnTypeFetchMultipleMintInfos, ReturnTypeFetchMultiplePoolInfos, ReturnTypeFetchMultiplePoolTickArrays, SqrtPriceMath, fetchMultipleMintInfos } from "@raydium-io/raydium-sdk";
+import { Connection, EpochInfo, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
+import bs58 from 'bs58';
+
 
 export interface DepthResult {
   label: string;
@@ -199,6 +203,158 @@ class WhirlpoolEdge implements Edge {
   }
 }
 
+class RaydiumEdge implements Edge {
+  constructor(
+    public label: string,
+    public inputMint: PublicKey,
+    public outputMint: PublicKey,
+    public poolPk: PublicKey,
+    public raydiumCache: RaydiumCache,
+  ) {}
+
+  static pairFromPool(poolInfo: AmmV3PoolInfo, raydiumCache: RaydiumCache): Edge[] {
+    const label = "raydium: " + poolInfo.id;
+    const fwd = new RaydiumEdge(
+      label,
+      new PublicKey(poolInfo.mintA.mint),
+      new PublicKey(poolInfo.mintB.mint),
+      new PublicKey(poolInfo.id),
+      raydiumCache,
+    );
+    const bwd = new RaydiumEdge(
+      label,
+      new PublicKey(poolInfo.mintB.mint),
+      new PublicKey(poolInfo.mintA.mint),
+      new PublicKey(poolInfo.id),
+      raydiumCache,
+    );
+    return [fwd, bwd];
+  }
+
+  async swap(
+    amount: BN,
+    otherAmountThreshold: BN,
+    mode: SwapMode,
+    slippage: number
+  ): Promise<SwapResult> {
+    try {
+      let ok: boolean = false;
+      let fee: BN;
+      let maxAmtIn: BN;
+      let minAmtOut: BN;
+      let feeRate: number;
+
+      if (mode === SwapMode.ExactIn) {
+        let amountOut: ReturnTypeComputeAmountOut = AmmV3.computeAmountOut(
+          {
+            poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+            tickArrayCache: this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
+            baseMint: this.inputMint,
+            token2022Infos: this.raydiumCache.mintInfos,
+            epochInfo: this.raydiumCache.epochInfo,
+            amountIn: amount,
+            slippage: slippage,
+          }
+         );
+        ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
+        fee = amountOut.fee;
+        maxAmtIn = amountOut.realAmountIn.amount;
+        feeRate = fee.toNumber() / maxAmtIn.toNumber();
+        minAmtOut = amountOut.minAmountOut.amount;
+      } else {
+        let amountIn: ReturnTypeComputeAmountOutBaseOut = AmmV3.computeAmountIn(
+          {
+            poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+            tickArrayCache: this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
+            baseMint: this.outputMint,
+            token2022Infos: this.raydiumCache.mintInfos,
+            epochInfo: this.raydiumCache.epochInfo,
+            amountOut: amount,
+            slippage: slippage,
+          }
+        );
+        ok = otherAmountThreshold.lte(amountIn.amountIn.amount);
+        fee = amountIn.fee;
+        maxAmtIn = amountIn.maxAmountIn.amount;
+        feeRate = fee.toNumber() / maxAmtIn.toNumber();
+        minAmtOut = amountIn.realAmountOut.amount;
+      }
+
+      let instructions = async (wallet: PublicKey) => {
+        const tokenIn = await getAssociatedTokenAddress(this.inputMint, wallet);
+        const tokenOut = await getAssociatedTokenAddress(
+          this.outputMint,
+          wallet
+        );
+
+        const swapIx = AmmV3.makeSwapBaseInInstructions({
+          poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+          ownerInfo: {
+            wallet: wallet,
+            tokenAccountA: tokenIn,
+            tokenAccountB: tokenOut,
+          },
+          inputMint: this.inputMint,
+          amountIn: amount,
+          amountOutMin: otherAmountThreshold,
+          sqrtPriceLimitX64: new BN(slippage),
+          remainingAccounts: [],
+        });
+        return swapIx.innerTransaction.instructions;
+      };
+
+      return {
+        ok: ok,
+        instructions,
+        label: this.poolPk.toString(),
+        marketInfos: [
+          {
+            label: "Raydium",
+            fee: {
+              amount: fee,
+              mint: this.inputMint,
+              rate: feeRate,
+            },
+          },
+        ],
+        maxAmtIn: maxAmtIn,
+        minAmtOut: minAmtOut,
+        mints: [this.inputMint, this.outputMint],
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        label: "",
+        marketInfos: [],
+        maxAmtIn: amount,
+        minAmtOut: otherAmountThreshold,
+        mints: [this.inputMint, this.outputMint],
+        instructions: async () => [],
+      };
+    }
+  }
+}
+
+export class RaydiumCache {
+  epochInfo: EpochInfo;
+  mintInfos: ReturnTypeFetchMultipleMintInfos;
+
+  poolInfos: ReturnTypeFetchMultiplePoolInfos;
+  tickArrayByPoolIds: ReturnTypeFetchMultiplePoolTickArrays;
+
+  constructor( 
+    epochInfo: EpochInfo,
+    mintInfos: ReturnTypeFetchMultipleMintInfos,
+    poolInfos: ReturnTypeFetchMultiplePoolInfos,
+    tickArrayByPoolIds: ReturnTypeFetchMultiplePoolTickArrays,
+  ) {
+    this.epochInfo = epochInfo;
+    this.mintInfos = mintInfos;
+    this.poolInfos = poolInfos;
+    this.tickArrayByPoolIds = tickArrayByPoolIds;
+  }
+}
+
 export class Router {
   minTvl: number;
   routes: Map<string, Map<string, Edge[]>>;
@@ -206,12 +362,17 @@ export class Router {
   whirlpoolClient: WhirlpoolClient;
   whirlpoolSub?: number;
 
+  connection: Connection;
+  raydiumCache?: RaydiumCache;
+  raydiumPoolInfoSub?: number;
+
   constructor(anchorProvider: AnchorProvider, minTvl: number) {
     this.minTvl = minTvl;
     this.routes = new Map();
     this.whirlpoolClient = buildWhirlpoolClient(
       WhirlpoolContext.withProvider(anchorProvider, ORCA_WHIRLPOOL_PROGRAM_ID)
     );
+    this.connection = anchorProvider.connection;
   }
 
   public async start(): Promise<void> {
@@ -235,6 +396,60 @@ export class Router {
         },
         "processed"
       );
+
+    await this.indexRaydium();
+
+    // Only the poolInfo is worth updating. tickArray and mintInfos should not change.
+    const poolInfoDiscriminator = Buffer.from(
+      sha256("account:PoolState")
+    ).slice(0, 8);
+    this.raydiumPoolInfoSub = this.connection.onProgramAccountChange(
+      MAINNET_PROGRAM_ID.CLMM,
+      (p) => {
+        const key = p.accountId.toBase58();
+        const accountData = p.accountInfo.data;
+        const layoutAccountInfo = PoolInfoLayout.decode(accountData);
+
+        // Cache only holds those filtered with enough TVL.
+        if (!(key in this.raydiumCache!.poolInfos)) {
+          return;
+        }
+
+        // Most of these fields dont matter, but update anyways.
+        this.raydiumCache!.poolInfos[key] = {
+          state: {
+            ...this.raydiumCache!.poolInfos[key].state,
+            observationId: layoutAccountInfo.observationId,
+            creator: layoutAccountInfo.creator,
+            version: 6,
+            tickSpacing: layoutAccountInfo.tickSpacing,
+            liquidity: layoutAccountInfo.liquidity,
+            sqrtPriceX64: layoutAccountInfo.sqrtPriceX64,
+            currentPrice: SqrtPriceMath.sqrtPriceX64ToPrice(
+              layoutAccountInfo.sqrtPriceX64,
+              layoutAccountInfo.mintDecimalsA,
+              layoutAccountInfo.mintDecimalsB
+            ),
+            tickCurrent: layoutAccountInfo.tickCurrent,
+            observationIndex: layoutAccountInfo.observationIndex,
+            observationUpdateDuration:
+              layoutAccountInfo.observationUpdateDuration,
+            feeGrowthGlobalX64A: layoutAccountInfo.feeGrowthGlobalX64A,
+            feeGrowthGlobalX64B: layoutAccountInfo.feeGrowthGlobalX64B,
+            protocolFeesTokenA: layoutAccountInfo.protocolFeesTokenA,
+            protocolFeesTokenB: layoutAccountInfo.protocolFeesTokenB,
+            swapInAmountTokenA: layoutAccountInfo.swapInAmountTokenA,
+            swapOutAmountTokenB: layoutAccountInfo.swapOutAmountTokenB,
+            swapInAmountTokenB: layoutAccountInfo.swapInAmountTokenB,
+            swapOutAmountTokenA: layoutAccountInfo.swapOutAmountTokenA,
+            tickArrayBitmap: layoutAccountInfo.tickArrayBitmap,
+            startTime: layoutAccountInfo.startTime.toNumber(),
+          },
+        };
+      },
+      "processed",
+      [{ memcmp: { offset: 0, bytes: bs58.encode(poolInfoDiscriminator) } }]
+    );
   }
 
   public async stop(): Promise<void> {
@@ -242,6 +457,9 @@ export class Router {
       await this.whirlpoolClient
         .getContext()
         .connection.removeProgramAccountChangeListener(this.whirlpoolSub);
+    }
+    if (this.raydiumPoolInfoSub) {
+      await this.connection.removeProgramAccountChangeListener(this.raydiumPoolInfoSub);
     }
   }
 
@@ -264,6 +482,66 @@ export class Router {
   addEdges(edges: Edge[]) {
     for (const edge of edges) {
       this.addEdge(edge);
+    }
+  }
+
+  async indexRaydium(): Promise<void> {
+    const response = await fetch('https://api.raydium.io/v2/ammV3/ammPools', { 
+      method: 'GET'
+    });
+    const poolData = (await response.json()).data as ApiAmmV3PoolsItem[];
+
+    // TODO: Do not trust the tvl and instead look it up like with jupiter prices
+    const poolsFilteredByTvl = poolData.filter((p: ApiAmmV3PoolsItem) => {
+      return p.tvl > this.minTvl;
+    });
+    console.log(
+      "found",
+      poolData.length,
+      "raydium pools.",
+      poolsFilteredByTvl.length,
+      "of those with TVL >",
+      this.minTvl,
+      "USD"
+    );
+
+    this.routes = new Map();
+
+    const poolInfos = await AmmV3.fetchMultiplePoolInfos(
+      {
+        connection: this.connection,
+        poolKeys: poolsFilteredByTvl,
+        ownerInfo: undefined,
+        chainTime: 0,
+        batchRequest: false,
+        updateOwnerRewardAndFee: true
+      }
+    );
+    const poolTickArrays = await AmmV3.fetchMultiplePoolTickArrays(
+      {
+        connection: this.connection,
+        poolKeys: poolsFilteredByTvl.map((p) => poolInfos[p.id].state),
+        batchRequest: false
+      }
+    );
+    const mints = poolsFilteredByTvl.map((p) => [new PublicKey(p.mintA), new PublicKey(p.mintB)]).flat();
+    const mintInfos = await fetchMultipleMintInfos(
+      {
+        connection: this.connection,
+        mints: mints,
+      }
+    );
+
+    this.raydiumCache = new RaydiumCache(
+      await this.connection.getEpochInfo(),
+      mintInfos,
+      poolInfos,
+      poolTickArrays,
+    )
+
+    for (const pool of poolsFilteredByTvl) {
+      const poolInfo = poolInfos[pool.id].state;
+      this.addEdges(RaydiumEdge.pairFromPool(poolInfo, this.raydiumCache));
     }
   }
 
@@ -339,7 +617,7 @@ export class Router {
     console.log(
       "found",
       poolsPks.length,
-      "pools.",
+      "orca pools.",
       filtered.length,
       "of those with TVL >",
       this.minTvl,
