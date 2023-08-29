@@ -376,6 +376,8 @@ export class Router {
   }
 
   public async start(): Promise<void> {
+    this.routes = new Map();
+
     await this.indexWhirpools();
 
     // setup a websocket connection to refresh all whirpool program accounts
@@ -505,8 +507,6 @@ export class Router {
       "USD"
     );
 
-    this.routes = new Map();
-
     const poolInfos = await AmmV3.fetchMultiplePoolInfos(
       {
         connection: this.connection,
@@ -624,7 +624,6 @@ export class Router {
       "USD"
     );
 
-    this.routes = new Map();
     for (const pool of filtered) {
       this.addEdges(WhirlpoolEdge.pairFromPool(pool, this.whirlpoolClient));
     }
