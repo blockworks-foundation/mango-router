@@ -383,6 +383,9 @@ export class Router {
     // setup a websocket connection to refresh all whirpool program accounts
     const idl = this.whirlpoolClient.getContext().program.idl;
     const whirlpoolCoder = new BorshAccountsCoder(idl as Idl);
+    const whirlpoolInfoDiscriminator = Buffer.from(
+      sha256("account:Whirlpool")
+    ).slice(0, 8);
     this.whirlpoolSub = this.whirlpoolClient
       .getContext()
       .connection.onProgramAccountChange(
@@ -396,7 +399,8 @@ export class Router {
             value,
           };
         },
-        "processed"
+        "processed",
+        [{ memcmp: { offset: 0, bytes: bs58.encode(whirlpoolInfoDiscriminator) } }]
       );
 
     await this.indexRaydium();
