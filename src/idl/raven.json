@@ -408,12 +408,16 @@
       ],
       "args": [
         {
-          "name": "amountInLots",
+          "name": "amountInAtoms",
           "type": "i64"
         },
         {
           "name": "isBase",
           "type": "bool"
+        },
+        {
+          "name": "minOutAtoms",
+          "type": "i64"
         }
       ]
     }
