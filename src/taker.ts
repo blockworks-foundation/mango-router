@@ -29,7 +29,7 @@ const cluster = (CLUSTER || "mainnet-beta") as Cluster;
 const groupPk = new PublicKey(
   GROUP || "78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX"
 );
-const maxRoutes = parseInt(MAX_ROUTES || "1");
+const maxRoutes = parseInt(MAX_ROUTES || "2");
 const minTvl = parseInt(MIN_TVL || "500");
 const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
@@ -81,74 +81,92 @@ async function main() {
   const router = new Router(anchorProvider, minTvl);
   await router.start();
 
-  const inputMint = "6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU";
-  const inputMintPk = new PublicKey(inputMint);
-  const outputMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-  const outputMintPk = new PublicKey(outputMint);
-  const mode = SwapMode.ExactIn;
-  const slippage = 0.0001;
-  const amount = new BN(10000);
-  const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
-  let referencePrice: number | undefined;
-  if (
-    group.banksMapByMint.has(inputMint) &&
-    group.banksMapByMint.has(outputMint)
-  ) {
-    const inputBank = group.banksMapByMint.get(inputMint)![0];
-    const outputBank = group.banksMapByMint.get(outputMint)![0];
+  while (true) {
+    const inputMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const inputMintPk = new PublicKey(inputMint);
+    const outputMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const outputMintPk = new PublicKey(outputMint);
+    const mode = SwapMode.ExactIn;
+    const slippage = 0.0001;
+    // const amount = new BN(10000 * 100);
+    const amount = new BN(1000000 * 100);
+    const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
+    let referencePrice: number | undefined;
+    if (
+      group.banksMapByMint.has(inputMint) &&
+      group.banksMapByMint.has(outputMint)
+    ) {
+      const inputBank = group.banksMapByMint.get(inputMint)![0];
+      const outputBank = group.banksMapByMint.get(outputMint)![0];
 
-    referencePrice =
-      (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
-        outputBank.uiPrice) /
-      inputBank.uiPrice;
-  }
+      referencePrice =
+        (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
+          outputBank.uiPrice) /
+        inputBank.uiPrice;
+    }
 
-  if (mode !== SwapMode.ExactIn && mode !== SwapMode.ExactOut) {
-    const error = { e: "mode needs to be one of ExactIn or ExactOut" };
-    return;
-  }
-
-  const results = await router.swap(
-    inputMintPk,
-    outputMintPk,
-    amount,
-    otherAmountThreshold,
-    mode,
-    slippage
-  );
-
-  const filtered = results.filter((r) => r.ok);
-  let ranked: SwapResult[] = [];
-  if (mode === SwapMode.ExactIn) {
-    ranked = filtered.sort((a, b) =>
-      Number(b.minAmtOut.sub(a.minAmtOut).toString())
+    const results = await router.swap(
+      inputMintPk,
+      outputMintPk,
+      amount,
+      otherAmountThreshold,
+      mode,
+      slippage
     );
-  } else if (mode === SwapMode.ExactOut) {
-    ranked = filtered.sort((a, b) =>
-      Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
-    );
-  }
-  const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
-  const ins = await best.instructions(wallet.publicKey);
-  let priceImpact: number | undefined = undefined;
-  if (!!referencePrice) {
-    const actualPrice =
-      Number(best.maxAmtIn.toString()) / Number(best.minAmtOut.toString());
-    priceImpact = actualPrice / referencePrice - 1;
-  }
 
-  const tx = new Transaction();
-  const response = await connection.getLatestBlockhash("finalized");
-  tx.recentBlockhash = response.blockhash;
-  tx.add(...ins);
-  tx.sign(keyPair);
+    const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
+    if (filtered.length == 0) continue;
 
-  const sig = await connection.sendTransaction(tx, [keyPair], {
-    skipPreflight: true,
-  });
-  console.log("send", sig);
-  const confirmationResult = await connection.confirmTransaction(sig);
-  console.log("confirmed", confirmationResult);
+    let ranked: SwapResult[] = [];
+    if (mode === SwapMode.ExactIn) {
+      ranked = filtered.sort((a, b) =>
+        Number(b.minAmtOut.sub(a.minAmtOut).toString())
+      );
+    } else if (mode === SwapMode.ExactOut) {
+      ranked = filtered.sort((a, b) =>
+        Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
+      );
+    }
+
+    // console.log(
+    //   "ranked",
+    //   ranked.map((r) => [r.label, r.minAmtOut.toString()])
+    // );
+
+    const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
+    const ins = await best.instructions(wallet.publicKey);
+    let priceImpact: number | undefined = undefined;
+    if (!!referencePrice) {
+      const actualPrice =
+        Number(best.maxAmtIn.toString()) / Number(best.minAmtOut.toString());
+      priceImpact = actualPrice / referencePrice - 1;
+    }
+
+    const profitable = best.minAmtOut.gt(best.maxAmtIn);
+
+    console.log(profitable, best.label, best.minAmtOut.toString());
+
+    await sleep(1000);
+
+    /*
+    const tx = new Transaction();
+    const response = await connection.getLatestBlockhash("finalized");
+    tx.recentBlockhash = response.blockhash;
+    tx.add(...ins);
+    tx.sign(keyPair);
+  
+    const sig = await connection.sendTransaction(tx, [keyPair], {
+      skipPreflight: true,
+    });
+    console.log("send", sig);
+    const confirmationResult = await connection.confirmTransaction(sig);
+    console.log("confirmed", confirmationResult);
+    */
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 main();

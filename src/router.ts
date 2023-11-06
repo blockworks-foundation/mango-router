@@ -399,7 +399,8 @@ export class Router {
   connection: Connection;
 
   ravenCache?: RavenCache;
-  ravenBookInfoSub?: number;
+  ravenBidsSub?: number;
+  ravenAsksSub?: number;
   raydiumCache?: RaydiumCache;
   raydiumPoolInfoSub?: number;
 
@@ -417,7 +418,6 @@ export class Router {
 
     await this.indexRaven();
 
-    /*
     await this.indexWhirpools();
 
     // setup a websocket connection to refresh all whirpool program accounts
@@ -503,8 +503,6 @@ export class Router {
       "processed",
       [{ memcmp: { offset: 0, bytes: bs58.encode(poolInfoDiscriminator) } }]
     );
-
-    */
   }
 
   public async stop(): Promise<void> {
@@ -518,8 +516,11 @@ export class Router {
         this.raydiumPoolInfoSub
       );
     }
-    if (this.ravenBookInfoSub) {
-      await this.connection.removeAccountChangeListener(this.ravenBookInfoSub);
+    if (this.ravenBidsSub) {
+      await this.connection.removeAccountChangeListener(this.ravenBidsSub);
+    }
+    if (this.ravenAsksSub) {
+      await this.connection.removeAccountChangeListener(this.ravenAsksSub);
     }
   }
 
@@ -578,7 +579,7 @@ export class Router {
 
     // setup subscription
 
-    this.ravenBookInfoSub = this.connection.onAccountChange(
+    this.ravenBidsSub = this.connection.onAccountChange(
       market.bids,
       (acc) => {
         const side = client.program.account.bookSide.coder.accounts.decode(
@@ -594,11 +595,27 @@ export class Router {
       },
       "processed"
     );
+    this.ravenAsksSub = this.connection.onAccountChange(
+      market.asks,
+      (acc) => {
+        const side = client.program.account.bookSide.coder.accounts.decode(
+          "bookSide",
+          acc.data
+        );
+        this.ravenCache!.asks = BookSide.from(
+          client,
+          this.ravenCache!.market,
+          BookSideType.asks,
+          side
+        );
+      },
+      "processed"
+    );
 
     // create edges
     const edges = [
       {
-        label: "rvn-tBTC-USDC",
+        label: "rvn-tbtc-usdc",
         inputMint: baseMint,
         outputMint: quoteMint,
         swap: async (
@@ -647,11 +664,21 @@ export class Router {
             );
             const nativeQuote = sumQuote
               .mul(this.ravenCache!.market.quoteLotSize)
-              .muln(1000)
-              .divn(1001);
+              .muln(10000)
+              .divn(10006);
             const feeQuote = sumQuote
               .mul(this.ravenCache!.market.quoteLotSize)
               .sub(nativeQuote);
+
+            /*
+            console.log(
+              "rvn-tbtc-usdc b:",
+              nativeBase.toString(),
+              "q:",
+              nativeQuote.toString(),
+              "f:",
+              feeQuote.toString()
+            );*/
 
             if (nativeQuote.gte(otherAmountThreshold)) {
               return {
@@ -664,7 +691,7 @@ export class Router {
                       mint: new PublicKey(
                         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
                       ),
-                      rate: 0.001,
+                      rate: 0.0006,
                     },
                   },
                 ],
@@ -693,7 +720,181 @@ export class Router {
                       quoteMint
                     );
                   const tradeIx = await program.methods
-                    .tradeJupiter(nativeBase, true, nativeQuote.mul(new BN(9_999)).div(new BN(10_000)))
+                    .tradeJupiter(nativeBase, true, nativeQuote)
+                    .accounts({
+                      trader: wallet,
+                      owner: PublicKey.findProgramAddressSync(
+                        [Buffer.from("pda")],
+                        new PublicKey(
+                          "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
+                        )
+                      )[0],
+                      account: new PublicKey(
+                        "GRR9y6yBxfxqVS7xQekRk4c6KUB2ukqSM8fY8GJSSCbo"
+                      ),
+                      perpMarket: this.ravenCache!.market.publicKey,
+                      perpOracle: this.ravenCache!.market.oracle,
+                      eventQueue: this.ravenCache!.market.eventQueue,
+                      bids: this.ravenCache!.market.bids,
+                      asks: this.ravenCache!.market.asks,
+                      baseBank: baseBank.publicKey,
+                      quoteBank: quoteBank.publicKey,
+                      baseVault: baseBank.vault,
+                      quoteVault: quoteBank.vault,
+                      baseOracle: baseBank.oracle,
+                      quoteOracle: quoteBank.oracle,
+                      group: group.publicKey,
+                      baseToken,
+                      quoteToken,
+                      mangoProgram: MANGO_V4_ID["mainnet-beta"],
+                      tokenProgram: TOKEN_PROGRAM_ID,
+                    })
+                    .instruction();
+
+                  return [prepIx, tradeIx];
+                },
+              };
+            }
+          } else {
+            // SwapMode.ExactOut
+            let amountOutLots = amount.div(
+              this.ravenCache!.market.quoteLotSize
+            );
+
+            const sumBase = new BN(0);
+            const sumQuote = new BN(0);
+            for (const order of this.ravenCache!.bids.items()) {
+              sumBase.iadd(order.sizeLots);
+              const orderQuoteLots = order.sizeLots.mul(order.priceLots);
+              sumQuote.iadd(orderQuoteLots);
+              const diff = sumQuote.sub(amountOutLots);
+              if (!diff.isNeg()) {
+                const extra = orderQuoteLots.sub(diff);
+                sumBase.isub(extra.div(order.priceLots));
+                break;
+              }
+              if (diff.isZero()) break;
+            }
+
+            // const nativeBase = sumBase.mul(this.ravenCache!.m);
+          }
+
+          // error case no swap result has been generated
+          return {
+            ok: false,
+            label: "",
+            marketInfos: [],
+            maxAmtIn: amount,
+            minAmtOut: otherAmountThreshold,
+            mints: [],
+            instructions: async () => [],
+          };
+        },
+      },
+      {
+        label: "rvn-usdc-tbtc",
+        inputMint: quoteMint,
+        outputMint: baseMint,
+        swap: async (
+          amount: BN,
+          otherAmountThreshold: BN,
+          mode: SwapMode,
+          slippage: number
+        ): Promise<SwapResult> => {
+          if (mode === SwapMode.ExactIn) {
+            let quoteFee = amount.muln(6).divn(10000);
+            let amountInLots = amount
+              .sub(quoteFee)
+              .div(this.ravenCache!.market.quoteLotSize);
+            // console.log("amt", amount.toString(), amountInLots.toString());
+
+            const sumBase = new BN(0);
+            const sumQuote = new BN(0);
+            for (const order of this.ravenCache!.asks.items()) {
+              /*
+              console.log(
+                "order",
+                order.sizeLots.toString(),
+                order.priceLots.toString(),
+                sumBase.toString(),
+                sumQuote.toString()
+              );
+              */
+              sumBase.iadd(order.sizeLots);
+              sumQuote.iadd(order.sizeLots.mul(order.priceLots));
+
+              const diff = sumQuote.sub(amountInLots);
+              // console.log("diff", diff.toString());
+              if (!diff.isNeg()) {
+                sumBase.isub(
+                  diff.add(order.priceLots.subn(1)).div(order.priceLots)
+                );
+                break;
+              }
+              if (diff.isZero()) break;
+            }
+
+            const nativeBase = sumBase
+              .mul(this.ravenCache!.market.baseLotSize)
+              .muln(
+                Math.pow(
+                  10,
+                  baseBank.mintDecimals - this.ravenCache!.market.baseDecimals
+                )
+              );
+
+            /*
+            console.log(
+              "rvn-usdc-tbtc b:",
+              nativeBase.toString(),
+              "q:",
+              amount.toString(),
+              "f:",
+              quoteFee.toString()
+            );
+            */
+
+            if (nativeBase.gte(otherAmountThreshold)) {
+              return {
+                label: "rvn-USDC-tBTC",
+                marketInfos: [
+                  {
+                    label: "raven",
+                    fee: {
+                      amount: quoteFee,
+                      mint: new PublicKey(
+                        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                      ),
+                      rate: 0.0006,
+                    },
+                  },
+                ],
+                maxAmtIn: amount,
+                minAmtOut: nativeBase,
+                mints: [],
+                ok: true,
+                instructions: async (wallet: PublicKey) => {
+                  const baseToken = await getAssociatedTokenAddress(
+                    baseMint,
+                    wallet
+                  );
+                  const quoteToken = await getAssociatedTokenAddress(
+                    quoteMint,
+                    wallet
+                  );
+                  const program = new Program(
+                    ravenIdl as Idl,
+                    "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1",
+                    userProvider
+                  );
+                  const prepIx =
+                    await createAssociatedTokenAccountIdempotentInstruction(
+                      wallet,
+                      wallet,
+                      baseMint
+                    );
+                  const tradeIx = await program.methods
+                    .tradeJupiter(amount, false, nativeBase)
                     .accounts({
                       trader: wallet,
                       owner: PublicKey.findProgramAddressSync(
