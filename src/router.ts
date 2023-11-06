@@ -46,6 +46,7 @@ import {
   fetchMultipleMintInfos,
 } from "@raydium-io/raydium-sdk";
 import {
+  AccountMeta,
   Connection,
   EpochInfo,
   Keypair,
@@ -551,6 +552,7 @@ export class Router {
     const userWallet = new Wallet(user);
     const userProvider = new AnchorProvider(this.connection, userWallet, {});
     const client = MangoClient.connect(
+      // @ts-ignore
       userProvider,
       "mainnet-beta",
       MANGO_V4_ID["mainnet-beta"],
@@ -560,6 +562,11 @@ export class Router {
     );
     const group = await client.getGroup(
       new PublicKey("78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX")
+    );
+    const ravenMangoAccount = await client.getMangoAccountForOwner(
+      group,
+      new PublicKey("J5RAupHab2G3j4VVFL54pKaubmmHA21n9uQNWZuZeuoT"),
+      0, /* First Mango account created */
     );
     const market = group.getPerpMarketByName("BTC-PERP");
     const bids = await market.loadBids(client, true);
@@ -692,6 +699,10 @@ export class Router {
                       wallet,
                       quoteMint
                     );
+
+                  // @ts-ignore
+                  const healthRemainingAccounts = client['buildHealthRemainingAccounts'](group, [ravenMangoAccount]);
+
                   const tradeIx = await program.methods
                     .tradeJupiter(nativeBase, true, nativeQuote.mul(new BN(9_999)).div(new BN(10_000)))
                     .accounts({
@@ -722,6 +733,12 @@ export class Router {
                       mangoProgram: MANGO_V4_ID["mainnet-beta"],
                       tokenProgram: TOKEN_PROGRAM_ID,
                     })
+                    .remainingAccounts(
+                      healthRemainingAccounts.map(
+                        (pk) =>
+                          ({ pubkey: pk, isWritable: false, isSigner: false } as AccountMeta),
+                      ),
+                    )
                     .instruction();
 
                   return [prepIx, tradeIx];
