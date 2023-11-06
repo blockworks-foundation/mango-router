@@ -1,4 +1,10 @@
 import {
+  BookSide,
+  BookSideType,
+  MANGO_V4_ID,
+  MangoClient,
+  PerpMarket,
+  createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddress,
   toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
@@ -15,13 +21,41 @@ import {
   swapQuoteByInputToken,
   swapQuoteByOutputToken,
 } from "@orca-so/whirlpools-sdk";
-import { AnchorProvider, BorshAccountsCoder, Idl } from "@project-serum/anchor";
-import { AmmV3, AmmV3PoolInfo, ApiAmmV3PoolsItem, MAINNET_PROGRAM_ID, PoolInfoLayout, ReturnTypeComputeAmountOut, ReturnTypeComputeAmountOutBaseOut, ReturnTypeFetchMultipleMintInfos, ReturnTypeFetchMultiplePoolInfos, ReturnTypeFetchMultiplePoolTickArrays, SqrtPriceMath, fetchMultipleMintInfos } from "@raydium-io/raydium-sdk";
-import { Connection, EpochInfo, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import {
+  AnchorProvider,
+  BorshAccountsCoder,
+  Idl,
+  Program,
+  Wallet,
+} from "@coral-xyz/anchor";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  AmmV3,
+  AmmV3PoolInfo,
+  ApiAmmV3PoolsItem,
+  MAINNET_PROGRAM_ID,
+  PoolInfoLayout,
+  ReturnTypeComputeAmountOut,
+  ReturnTypeComputeAmountOutBaseOut,
+  ReturnTypeFetchMultipleMintInfos,
+  ReturnTypeFetchMultiplePoolInfos,
+  ReturnTypeFetchMultiplePoolTickArrays,
+  SqrtPriceMath,
+  TOKEN_PROGRAM_ID,
+  bits,
+  fetchMultipleMintInfos,
+} from "@raydium-io/raydium-sdk";
+import {
+  Connection,
+  EpochInfo,
+  Keypair,
+  PublicKey,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
-import bs58 from 'bs58';
-
+import bs58 from "bs58";
+import ravenIdl from "./idl/raven.json";
 
 export interface DepthResult {
   label: string;
@@ -209,24 +243,27 @@ class RaydiumEdge implements Edge {
     public inputMint: PublicKey,
     public outputMint: PublicKey,
     public poolPk: PublicKey,
-    public raydiumCache: RaydiumCache,
+    public raydiumCache: RaydiumCache
   ) {}
 
-  static pairFromPool(poolInfo: AmmV3PoolInfo, raydiumCache: RaydiumCache): Edge[] {
+  static pairFromPool(
+    poolInfo: AmmV3PoolInfo,
+    raydiumCache: RaydiumCache
+  ): Edge[] {
     const label = "raydium: " + poolInfo.id;
     const fwd = new RaydiumEdge(
       label,
       new PublicKey(poolInfo.mintA.mint),
       new PublicKey(poolInfo.mintB.mint),
       new PublicKey(poolInfo.id),
-      raydiumCache,
+      raydiumCache
     );
     const bwd = new RaydiumEdge(
       label,
       new PublicKey(poolInfo.mintB.mint),
       new PublicKey(poolInfo.mintA.mint),
       new PublicKey(poolInfo.id),
-      raydiumCache,
+      raydiumCache
     );
     return [fwd, bwd];
   }
@@ -245,17 +282,16 @@ class RaydiumEdge implements Edge {
       let feeRate: number;
 
       if (mode === SwapMode.ExactIn) {
-        let amountOut: ReturnTypeComputeAmountOut = AmmV3.computeAmountOut(
-          {
-            poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
-            tickArrayCache: this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
-            baseMint: this.inputMint,
-            token2022Infos: this.raydiumCache.mintInfos,
-            epochInfo: this.raydiumCache.epochInfo,
-            amountIn: amount,
-            slippage: slippage,
-          }
-         );
+        let amountOut: ReturnTypeComputeAmountOut = AmmV3.computeAmountOut({
+          poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+          tickArrayCache:
+            this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
+          baseMint: this.inputMint,
+          token2022Infos: this.raydiumCache.mintInfos,
+          epochInfo: this.raydiumCache.epochInfo,
+          amountIn: amount,
+          slippage: slippage,
+        });
         ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
@@ -265,7 +301,8 @@ class RaydiumEdge implements Edge {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = AmmV3.computeAmountIn(
           {
             poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
-            tickArrayCache: this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
+            tickArrayCache:
+              this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
             baseMint: this.outputMint,
             token2022Infos: this.raydiumCache.mintInfos,
             epochInfo: this.raydiumCache.epochInfo,
@@ -335,34 +372,34 @@ class RaydiumEdge implements Edge {
   }
 }
 
+export class RavenCache {
+  constructor(
+    public market: PerpMarket,
+    public bids: BookSide,
+    public asks: BookSide
+  ) {}
+}
+
 export class RaydiumCache {
-  epochInfo: EpochInfo;
-  mintInfos: ReturnTypeFetchMultipleMintInfos;
-
-  poolInfos: ReturnTypeFetchMultiplePoolInfos;
-  tickArrayByPoolIds: ReturnTypeFetchMultiplePoolTickArrays;
-
-  constructor( 
-    epochInfo: EpochInfo,
-    mintInfos: ReturnTypeFetchMultipleMintInfos,
-    poolInfos: ReturnTypeFetchMultiplePoolInfos,
-    tickArrayByPoolIds: ReturnTypeFetchMultiplePoolTickArrays,
-  ) {
-    this.epochInfo = epochInfo;
-    this.mintInfos = mintInfos;
-    this.poolInfos = poolInfos;
-    this.tickArrayByPoolIds = tickArrayByPoolIds;
-  }
+  constructor(
+    public epochInfo: EpochInfo,
+    public mintInfos: ReturnTypeFetchMultipleMintInfos,
+    public poolInfos: ReturnTypeFetchMultiplePoolInfos,
+    public tickArrayByPoolIds: ReturnTypeFetchMultiplePoolTickArrays
+  ) {}
 }
 
 export class Router {
   minTvl: number;
   routes: Map<string, Map<string, Edge[]>>;
-  
+
   whirlpoolClient: WhirlpoolClient;
   whirlpoolSub?: number;
 
   connection: Connection;
+
+  ravenCache?: RavenCache;
+  ravenBookInfoSub?: number;
   raydiumCache?: RaydiumCache;
   raydiumPoolInfoSub?: number;
 
@@ -378,6 +415,9 @@ export class Router {
   public async start(): Promise<void> {
     this.routes = new Map();
 
+    await this.indexRaven();
+
+    /*
     await this.indexWhirpools();
 
     // setup a websocket connection to refresh all whirpool program accounts
@@ -400,7 +440,14 @@ export class Router {
           };
         },
         "processed",
-        [{ memcmp: { offset: 0, bytes: bs58.encode(whirlpoolInfoDiscriminator) } }]
+        [
+          {
+            memcmp: {
+              offset: 0,
+              bytes: bs58.encode(whirlpoolInfoDiscriminator),
+            },
+          },
+        ]
       );
 
     await this.indexRaydium();
@@ -456,6 +503,8 @@ export class Router {
       "processed",
       [{ memcmp: { offset: 0, bytes: bs58.encode(poolInfoDiscriminator) } }]
     );
+
+    */
   }
 
   public async stop(): Promise<void> {
@@ -465,7 +514,12 @@ export class Router {
         .connection.removeProgramAccountChangeListener(this.whirlpoolSub);
     }
     if (this.raydiumPoolInfoSub) {
-      await this.connection.removeProgramAccountChangeListener(this.raydiumPoolInfoSub);
+      await this.connection.removeProgramAccountChangeListener(
+        this.raydiumPoolInfoSub
+      );
+    }
+    if (this.ravenBookInfoSub) {
+      await this.connection.removeAccountChangeListener(this.ravenBookInfoSub);
     }
   }
 
@@ -491,9 +545,233 @@ export class Router {
     }
   }
 
+  async indexRaven(): Promise<void> {
+    // load initial cache state
+    const user = Keypair.generate();
+    const userWallet = new Wallet(user);
+    const userProvider = new AnchorProvider(this.connection, userWallet, {});
+    const client = MangoClient.connect(
+      userProvider,
+      "mainnet-beta",
+      MANGO_V4_ID["mainnet-beta"],
+      {
+        idsSource: "get-program-accounts",
+      }
+    );
+    const group = await client.getGroup(
+      new PublicKey("78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX")
+    );
+    const market = group.getPerpMarketByName("BTC-PERP");
+    const bids = await market.loadBids(client, true);
+    const asks = await market.loadAsks(client, true);
+    const baseMint = new PublicKey(
+      "6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"
+    );
+    const quoteMint = new PublicKey(
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    );
+
+    const baseBank = group.getFirstBankByMint(baseMint);
+    const quoteBank = group.getFirstBankByMint(quoteMint);
+
+    this.ravenCache = new RavenCache(market, bids, asks);
+
+    // setup subscription
+
+    this.ravenBookInfoSub = this.connection.onAccountChange(
+      market.bids,
+      (acc) => {
+        const side = client.program.account.bookSide.coder.accounts.decode(
+          "bookSide",
+          acc.data
+        );
+        this.ravenCache!.bids = BookSide.from(
+          client,
+          this.ravenCache!.market,
+          BookSideType.bids,
+          side
+        );
+      },
+      "processed"
+    );
+
+    // create edges
+    const edges = [
+      {
+        label: "rvn-tBTC-USDC",
+        inputMint: baseMint,
+        outputMint: quoteMint,
+        swap: async (
+          amount: BN,
+          otherAmountThreshold: BN,
+          mode: SwapMode,
+          slippage: number
+        ): Promise<SwapResult> => {
+          if (mode === SwapMode.ExactIn) {
+            let amountInLots = amount
+              .divn(
+                Math.pow(
+                  10,
+                  baseBank.mintDecimals - this.ravenCache!.market.baseDecimals
+                )
+              )
+              .div(this.ravenCache!.market.baseLotSize);
+            // console.log("amt", amount.toString(), amountInLots.toString());
+
+            const sumBase = new BN(0);
+            const sumQuote = new BN(0);
+            for (const order of this.ravenCache!.bids.items()) {
+              /*
+              console.log(
+                "order",
+                order.sizeLots.toString(),
+                order.priceLots.toString(),
+                sumBase.toString(),
+                sumQuote.toString()
+              );
+              */
+              sumBase.iadd(order.sizeLots);
+              sumQuote.iadd(order.sizeLots.mul(order.priceLots));
+
+              const diff = sumBase.sub(amountInLots);
+              // console.log("diff", diff.toString());
+              if (!diff.isNeg()) {
+                sumQuote.isub(diff.mul(order.priceLots));
+                break;
+              }
+              if (diff.isZero()) break;
+            }
+
+            const nativeBase = amountInLots.mul(
+              this.ravenCache!.market.baseLotSize
+            );
+            const nativeQuote = sumQuote
+              .mul(this.ravenCache!.market.quoteLotSize)
+              .muln(1000)
+              .divn(1001);
+            const feeQuote = sumQuote
+              .mul(this.ravenCache!.market.quoteLotSize)
+              .sub(nativeQuote);
+
+            if (nativeQuote.gte(otherAmountThreshold)) {
+              return {
+                label: "rvn-tBTC-USDC",
+                marketInfos: [
+                  {
+                    label: "raven",
+                    fee: {
+                      amount: feeQuote,
+                      mint: new PublicKey(
+                        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                      ),
+                      rate: 0.001,
+                    },
+                  },
+                ],
+                maxAmtIn: nativeBase,
+                minAmtOut: nativeQuote,
+                mints: [],
+                ok: true,
+                instructions: async (wallet: PublicKey) => {
+                  const baseToken = await getAssociatedTokenAddress(
+                    baseMint,
+                    wallet
+                  );
+                  const quoteToken = await getAssociatedTokenAddress(
+                    quoteMint,
+                    wallet
+                  );
+                  const program = new Program(
+                    ravenIdl as Idl,
+                    "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1",
+                    userProvider
+                  );
+                  const prepIx =
+                    await createAssociatedTokenAccountIdempotentInstruction(
+                      wallet,
+                      wallet,
+                      quoteMint
+                    );
+                  const tradeIx = await program.methods
+                    .tradeJupiter(amountInLots, true)
+                    .accounts({
+                      trader: wallet,
+                      owner: PublicKey.findProgramAddressSync(
+                        [Buffer.from("pda")],
+                        new PublicKey(
+                          "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
+                        )
+                      )[0],
+                      account: new PublicKey(
+                        "GRR9y6yBxfxqVS7xQekRk4c6KUB2ukqSM8fY8GJSSCbo"
+                      ),
+                      perpMarket: this.ravenCache!.market.publicKey,
+                      perpOracle: this.ravenCache!.market.oracle,
+                      eventQueue: this.ravenCache!.market.eventQueue,
+                      bids: this.ravenCache!.market.bids,
+                      asks: this.ravenCache!.market.asks,
+                      baseBank: baseBank.publicKey,
+                      quoteBank: quoteBank.publicKey,
+                      baseVault: baseBank.vault,
+                      quoteVault: quoteBank.vault,
+                      baseOracle: baseBank.oracle,
+                      quoteOracle: quoteBank.oracle,
+                      group: group.publicKey,
+                      baseToken,
+                      quoteToken,
+                      mangoProgram: MANGO_V4_ID["mainnet-beta"],
+                      tokenProgram: TOKEN_PROGRAM_ID,
+                    })
+                    .instruction();
+
+                  return [prepIx, tradeIx];
+                },
+              };
+            }
+          } else {
+            // SwapMode.ExactOut
+            let amountOutLots = amount.div(
+              this.ravenCache!.market.quoteLotSize
+            );
+
+            const sumBase = new BN(0);
+            const sumQuote = new BN(0);
+            for (const order of this.ravenCache!.bids.items()) {
+              sumBase.iadd(order.sizeLots);
+              const orderQuoteLots = order.sizeLots.mul(order.priceLots);
+              sumQuote.iadd(orderQuoteLots);
+              const diff = sumQuote.sub(amountOutLots);
+              if (!diff.isNeg()) {
+                const extra = orderQuoteLots.sub(diff);
+                sumBase.isub(extra.div(order.priceLots));
+                break;
+              }
+              if (diff.isZero()) break;
+            }
+
+            // const nativeBase = sumBase.mul(this.ravenCache!.m);
+          }
+
+          // error case no swap result has been generated
+          return {
+            ok: false,
+            label: "",
+            marketInfos: [],
+            maxAmtIn: amount,
+            minAmtOut: otherAmountThreshold,
+            mints: [],
+            instructions: async () => [],
+          };
+        },
+      },
+    ];
+
+    this.addEdges(edges);
+  }
+
   async indexRaydium(): Promise<void> {
-    const response = await fetch('https://api.raydium.io/v2/ammV3/ammPools', { 
-      method: 'GET'
+    const response = await fetch("https://api.raydium.io/v2/ammV3/ammPools", {
+      method: "GET",
     });
     const poolData = (await response.json()).data as ApiAmmV3PoolsItem[];
 
@@ -511,37 +789,33 @@ export class Router {
       "USD"
     );
 
-    const poolInfos = await AmmV3.fetchMultiplePoolInfos(
-      {
-        connection: this.connection,
-        poolKeys: poolsFilteredByTvl,
-        ownerInfo: undefined,
-        chainTime: 0,
-        batchRequest: false,
-        updateOwnerRewardAndFee: true
-      }
-    );
-    const poolTickArrays = await AmmV3.fetchMultiplePoolTickArrays(
-      {
-        connection: this.connection,
-        poolKeys: poolsFilteredByTvl.map((p) => poolInfos[p.id].state),
-        batchRequest: false
-      }
-    );
-    const mints = poolsFilteredByTvl.map((p) => [new PublicKey(p.mintA), new PublicKey(p.mintB)]).flat();
-    const mintInfos = await fetchMultipleMintInfos(
-      {
-        connection: this.connection,
-        mints: mints,
-      }
-    );
+    const poolInfos = await AmmV3.fetchMultiplePoolInfos({
+      connection: this.connection,
+      poolKeys: poolsFilteredByTvl,
+      ownerInfo: undefined,
+      chainTime: 0,
+      batchRequest: false,
+      updateOwnerRewardAndFee: true,
+    });
+    const poolTickArrays = await AmmV3.fetchMultiplePoolTickArrays({
+      connection: this.connection,
+      poolKeys: poolsFilteredByTvl.map((p) => poolInfos[p.id].state),
+      batchRequest: false,
+    });
+    const mints = poolsFilteredByTvl
+      .map((p) => [new PublicKey(p.mintA), new PublicKey(p.mintB)])
+      .flat();
+    const mintInfos = await fetchMultipleMintInfos({
+      connection: this.connection,
+      mints: mints,
+    });
 
     this.raydiumCache = new RaydiumCache(
       await this.connection.getEpochInfo(),
       mintInfos,
       poolInfos,
-      poolTickArrays,
-    )
+      poolTickArrays
+    );
 
     for (const pool of poolsFilteredByTvl) {
       const poolInfo = poolInfos[pool.id].state;
