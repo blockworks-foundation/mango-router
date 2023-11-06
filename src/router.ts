@@ -693,7 +693,7 @@ export class Router {
                       quoteMint
                     );
                   const tradeIx = await program.methods
-                    .tradeJupiter(nativeBase, true, nativeBase.mul(new BN(9_999)).div(new BN(10_000)))
+                    .tradeJupiter(nativeBase, true, nativeQuote.mul(new BN(9_999)).div(new BN(10_000)))
                     .accounts({
                       trader: wallet,
                       owner: PublicKey.findProgramAddressSync(
