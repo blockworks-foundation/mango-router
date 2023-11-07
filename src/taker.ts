@@ -120,7 +120,7 @@ async function main() {
       const outputMint = MINT!;
       const outputMintPk = new PublicKey(outputMint);
       const mode = SwapMode.ExactIn;
-      const slippage = 0.0001;
+      const slippage = 0.00001;
       // const amount = new BN(10000);
       // const amount = new BN(1000000 * 20);
       let referencePrice: number | undefined;

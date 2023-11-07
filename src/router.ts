@@ -675,7 +675,7 @@ export class Router {
                   },
                 ],
                 maxAmtIn: nativeBase,
-                minAmtOut: nativeQuote,
+                minAmtOut: nativeQuote.muln(1e7 * (1 - slippage)).divn(1e7),
                 mints: [],
                 ok: true,
                 instructions: async (wallet: PublicKey) => {
