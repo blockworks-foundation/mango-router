@@ -1,7 +1,9 @@
 import {
   BookSide,
   BookSideType,
+  Group,
   MANGO_V4_ID,
+  MangoAccount,
   MangoClient,
   PerpMarket,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -29,10 +31,9 @@ import {
   Wallet,
 } from "@coral-xyz/anchor";
 import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  AmmV3,
-  AmmV3PoolInfo,
-  ApiAmmV3PoolsItem,
+  Clmm,
+  ClmmPoolInfo,
+  ApiClmmPoolsItem,
   MAINNET_PROGRAM_ID,
   PoolInfoLayout,
   ReturnTypeComputeAmountOut,
@@ -42,8 +43,10 @@ import {
   ReturnTypeFetchMultiplePoolTickArrays,
   SqrtPriceMath,
   TOKEN_PROGRAM_ID,
-  bits,
   fetchMultipleMintInfos,
+  MIN_SQRT_PRICE_X64,
+  ONE,
+  MAX_SQRT_PRICE_X64,
 } from "@raydium-io/raydium-sdk";
 import {
   AccountMeta,
@@ -248,7 +251,7 @@ class RaydiumEdge implements Edge {
   ) {}
 
   static pairFromPool(
-    poolInfo: AmmV3PoolInfo,
+    poolInfo: ClmmPoolInfo,
     raydiumCache: RaydiumCache
   ): Edge[] {
     const label = "raydium: " + poolInfo.id;
@@ -281,10 +284,13 @@ class RaydiumEdge implements Edge {
       let maxAmtIn: BN;
       let minAmtOut: BN;
       let feeRate: number;
+      let remainingAccounts: PublicKey[];
 
       if (mode === SwapMode.ExactIn) {
-        let amountOut: ReturnTypeComputeAmountOut = AmmV3.computeAmountOut({
-          poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+        const poolInfo =
+          this.raydiumCache.poolInfos[this.poolPk.toBase58()].state;
+        let amountOut: ReturnTypeComputeAmountOut = Clmm.computeAmountOut({
+          poolInfo,
           tickArrayCache:
             this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
           baseMint: this.inputMint,
@@ -293,29 +299,31 @@ class RaydiumEdge implements Edge {
           amountIn: amount,
           slippage: slippage,
         });
-        ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
+        ok = otherAmountThreshold.gte(amountOut.amountOut.amount);
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountOut.minAmountOut.amount;
+        remainingAccounts = amountOut.remainingAccounts;
       } else {
-        let amountIn: ReturnTypeComputeAmountOutBaseOut = AmmV3.computeAmountIn(
-          {
-            poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
-            tickArrayCache:
-              this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
-            baseMint: this.outputMint,
-            token2022Infos: this.raydiumCache.mintInfos,
-            epochInfo: this.raydiumCache.epochInfo,
-            amountOut: amount,
-            slippage: slippage,
-          }
-        );
+        const poolInfo =
+          this.raydiumCache.poolInfos[this.poolPk.toBase58()].state;
+        let amountIn: ReturnTypeComputeAmountOutBaseOut = Clmm.computeAmountIn({
+          poolInfo,
+          tickArrayCache:
+            this.raydiumCache.tickArrayByPoolIds[this.poolPk.toBase58()],
+          baseMint: this.outputMint,
+          token2022Infos: this.raydiumCache.mintInfos,
+          epochInfo: this.raydiumCache.epochInfo,
+          amountOut: amount,
+          slippage: slippage,
+        });
         ok = otherAmountThreshold.lte(amountIn.amountIn.amount);
         fee = amountIn.fee;
         maxAmtIn = amountIn.maxAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
+        remainingAccounts = amountIn.remainingAccounts;
       }
 
       let instructions = async (wallet: PublicKey) => {
@@ -325,7 +333,7 @@ class RaydiumEdge implements Edge {
           wallet
         );
 
-        const swapIx = AmmV3.makeSwapBaseInInstructions({
+        const swapIx = Clmm.makeSwapBaseInInstructions({
           poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
           ownerInfo: {
             wallet: wallet,
@@ -335,8 +343,8 @@ class RaydiumEdge implements Edge {
           inputMint: this.inputMint,
           amountIn: amount,
           amountOutMin: otherAmountThreshold,
-          sqrtPriceLimitX64: new BN(slippage),
-          remainingAccounts: [],
+          sqrtPriceLimitX64: new BN(0),
+          remainingAccounts,
         });
         return swapIx.innerTransaction.instructions;
       };
@@ -399,11 +407,9 @@ export class Router {
 
   connection: Connection;
 
-  ravenCache?: RavenCache;
-  ravenBidsSub?: number;
-  ravenAsksSub?: number;
   raydiumCache?: RaydiumCache;
   raydiumPoolInfoSub?: number;
+  subscriptions: number[];
 
   constructor(anchorProvider: AnchorProvider, minTvl: number) {
     this.minTvl = minTvl;
@@ -412,10 +418,12 @@ export class Router {
       WhirlpoolContext.withProvider(anchorProvider, ORCA_WHIRLPOOL_PROGRAM_ID)
     );
     this.connection = anchorProvider.connection;
+    this.subscriptions = [];
   }
 
   public async start(): Promise<void> {
     this.routes = new Map();
+    this.subscriptions = [];
 
     await this.indexRaven();
 
@@ -517,11 +525,8 @@ export class Router {
         this.raydiumPoolInfoSub
       );
     }
-    if (this.ravenBidsSub) {
-      await this.connection.removeAccountChangeListener(this.ravenBidsSub);
-    }
-    if (this.ravenAsksSub) {
-      await this.connection.removeAccountChangeListener(this.ravenAsksSub);
+    for (const sub of this.subscriptions) {
+      await this.connection.removeAccountChangeListener(sub);
     }
   }
 
@@ -547,82 +552,60 @@ export class Router {
     }
   }
 
-  async indexRaven(): Promise<void> {
-    // load initial cache state
-    const user = Keypair.generate();
-    const userWallet = new Wallet(user);
-    const userProvider = new AnchorProvider(this.connection, userWallet, {});
-    const client = MangoClient.connect(
-      // @ts-ignore
-      userProvider,
-      "mainnet-beta",
-      MANGO_V4_ID["mainnet-beta"],
-      {
-        idsSource: "get-program-accounts",
-      }
-    );
-    const group = await client.getGroup(
-      new PublicKey("78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX")
-    );
-    const ravenMangoAccount = await client.getMangoAccountForOwner(
-      group,
-      new PublicKey("J5RAupHab2G3j4VVFL54pKaubmmHA21n9uQNWZuZeuoT"),
-      0, /* First Mango account created */
-    );
-    const market = group.getPerpMarketByName("BTC-PERP");
-    const bids = await market.loadBids(client, true);
-    const asks = await market.loadAsks(client, true);
-    const baseMint = new PublicKey(
-      "6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"
-    );
-    const quoteMint = new PublicKey(
-      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-    );
+  async addRavenEdges(
+    raven: Program,
+    pda: PublicKey,
+    client: MangoClient,
+    group: Group,
+    mangoAccount: MangoAccount,
+    perpMarketLabel: string,
+    baseMintLabel: string,
+    quoteMintLabel: string,
+    baseMint: PublicKey,
+    quoteMint: PublicKey
+  ): Promise<void> {
+    const market = group.getPerpMarketByName(perpMarketLabel);
+    const booksides = await Promise.all([
+      market.loadBids(client, true),
+      market.loadAsks(client, true),
+    ]);
 
     const baseBank = group.getFirstBankByMint(baseMint);
     const quoteBank = group.getFirstBankByMint(quoteMint);
 
-    this.ravenCache = new RavenCache(market, bids, asks);
-
     // setup subscription
 
-    this.ravenBidsSub = this.connection.onAccountChange(
-      market.bids,
-      (acc) => {
-        const side = client.program.account.bookSide.coder.accounts.decode(
-          "bookSide",
-          acc.data
-        );
-        this.ravenCache!.bids = BookSide.from(
-          client,
-          this.ravenCache!.market,
-          BookSideType.bids,
-          side
-        );
-      },
-      "processed"
+    this.subscriptions.push(
+      this.connection.onAccountChange(
+        market.bids,
+        (acc) => {
+          const side = client.program.account.bookSide.coder.accounts.decode(
+            "bookSide",
+            acc.data
+          );
+          booksides[0] = BookSide.from(client, market, BookSideType.bids, side);
+        },
+        "processed"
+      )
     );
-    this.ravenAsksSub = this.connection.onAccountChange(
-      market.asks,
-      (acc) => {
-        const side = client.program.account.bookSide.coder.accounts.decode(
-          "bookSide",
-          acc.data
-        );
-        this.ravenCache!.asks = BookSide.from(
-          client,
-          this.ravenCache!.market,
-          BookSideType.asks,
-          side
-        );
-      },
-      "processed"
+    this.subscriptions.push(
+      this.connection.onAccountChange(
+        market.asks,
+        (acc) => {
+          const side = client.program.account.bookSide.coder.accounts.decode(
+            "bookSide",
+            acc.data
+          );
+          booksides[1] = BookSide.from(client, market, BookSideType.asks, side);
+        },
+        "processed"
+      )
     );
 
     // create edges
     const edges = [
       {
-        label: "rvn-tbtc-usdc",
+        label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
         inputMint: baseMint,
         outputMint: quoteMint,
         swap: async (
@@ -633,18 +616,13 @@ export class Router {
         ): Promise<SwapResult> => {
           if (mode === SwapMode.ExactIn) {
             let amountInLots = amount
-              .divn(
-                Math.pow(
-                  10,
-                  baseBank.mintDecimals - this.ravenCache!.market.baseDecimals
-                )
-              )
-              .div(this.ravenCache!.market.baseLotSize);
+              .divn(Math.pow(10, baseBank.mintDecimals - market.baseDecimals))
+              .div(market.baseLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
-            for (const order of this.ravenCache!.bids.items()) {
+            for (const order of booksides[0].items()) {
               /*
               console.log(
                 "order",
@@ -666,16 +644,14 @@ export class Router {
               if (diff.isZero()) break;
             }
 
-            const nativeBase = amountInLots.mul(
-              this.ravenCache!.market.baseLotSize
-            );
+            const nativeBase = amountInLots
+              .mul(market.baseLotSize)
+              .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
             const nativeQuote = sumQuote
-              .mul(this.ravenCache!.market.quoteLotSize)
+              .mul(market.quoteLotSize)
               .muln(10000)
               .divn(10006);
-            const feeQuote = sumQuote
-              .mul(this.ravenCache!.market.quoteLotSize)
-              .sub(nativeQuote);
+            const feeQuote = sumQuote.mul(market.quoteLotSize).sub(nativeQuote);
 
             /*
             console.log(
@@ -689,15 +665,13 @@ export class Router {
 
             if (nativeQuote.gte(otherAmountThreshold)) {
               return {
-                label: "rvn-tBTC-USDC",
+                label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
                   {
                     label: "raven",
                     fee: {
                       amount: feeQuote,
-                      mint: new PublicKey(
-                        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-                      ),
+                      mint: quoteMint,
                       rate: 0.0006,
                     },
                   },
@@ -715,11 +689,7 @@ export class Router {
                     quoteMint,
                     wallet
                   );
-                  const program = new Program(
-                    ravenIdl as Idl,
-                    "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1",
-                    userProvider
-                  );
+
                   const prepIx =
                     await createAssociatedTokenAccountIdempotentInstruction(
                       wallet,
@@ -728,26 +698,21 @@ export class Router {
                     );
 
                   // @ts-ignore
-                  const healthRemainingAccounts = client['buildHealthRemainingAccounts'](group, [ravenMangoAccount]);
+                  const healthRemainingAccounts = client[
+                    "buildHealthRemainingAccounts"
+                  ](group, [mangoAccount]);
 
-                  const tradeIx = await program.methods
+                  const tradeIx = await raven.methods
                     .tradeJupiter(nativeBase, true, nativeQuote)
                     .accounts({
                       trader: wallet,
-                      owner: PublicKey.findProgramAddressSync(
-                        [Buffer.from("pda")],
-                        new PublicKey(
-                          "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
-                        )
-                      )[0],
-                      account: new PublicKey(
-                        "GRR9y6yBxfxqVS7xQekRk4c6KUB2ukqSM8fY8GJSSCbo"
-                      ),
-                      perpMarket: this.ravenCache!.market.publicKey,
-                      perpOracle: this.ravenCache!.market.oracle,
-                      eventQueue: this.ravenCache!.market.eventQueue,
-                      bids: this.ravenCache!.market.bids,
-                      asks: this.ravenCache!.market.asks,
+                      owner: pda,
+                      account: mangoAccount.publicKey,
+                      perpMarket: market.publicKey,
+                      perpOracle: market.oracle,
+                      eventQueue: market.eventQueue,
+                      bids: market.bids,
+                      asks: market.asks,
                       baseBank: baseBank.publicKey,
                       quoteBank: quoteBank.publicKey,
                       baseVault: baseBank.vault,
@@ -760,6 +725,16 @@ export class Router {
                       mangoProgram: MANGO_V4_ID["mainnet-beta"],
                       tokenProgram: TOKEN_PROGRAM_ID,
                     })
+                    .remainingAccounts(
+                      healthRemainingAccounts.map(
+                        (pk: any) =>
+                          ({
+                            pubkey: pk,
+                            isWritable: false,
+                            isSigner: false,
+                          } as AccountMeta)
+                      )
+                    )
                     .instruction();
 
                   return [prepIx, tradeIx];
@@ -768,13 +743,11 @@ export class Router {
             }
           } else {
             // SwapMode.ExactOut
-            let amountOutLots = amount.div(
-              this.ravenCache!.market.quoteLotSize
-            );
+            let amountOutLots = amount.div(market.quoteLotSize);
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
-            for (const order of this.ravenCache!.bids.items()) {
+            for (const order of booksides[0].items()) {
               sumBase.iadd(order.sizeLots);
               const orderQuoteLots = order.sizeLots.mul(order.priceLots);
               sumQuote.iadd(orderQuoteLots);
@@ -786,8 +759,6 @@ export class Router {
               }
               if (diff.isZero()) break;
             }
-
-            // const nativeBase = sumBase.mul(this.ravenCache!.m);
           }
 
           // error case no swap result has been generated
@@ -803,7 +774,7 @@ export class Router {
         },
       },
       {
-        label: "rvn-usdc-tbtc",
+        label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
         inputMint: quoteMint,
         outputMint: baseMint,
         swap: async (
@@ -814,14 +785,12 @@ export class Router {
         ): Promise<SwapResult> => {
           if (mode === SwapMode.ExactIn) {
             let quoteFee = amount.muln(6).divn(10000);
-            let amountInLots = amount
-              .sub(quoteFee)
-              .div(this.ravenCache!.market.quoteLotSize);
+            let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
-            for (const order of this.ravenCache!.asks.items()) {
+            for (const order of booksides[1].items()) {
               /*
               console.log(
                 "order",
@@ -846,13 +815,8 @@ export class Router {
             }
 
             const nativeBase = sumBase
-              .mul(this.ravenCache!.market.baseLotSize)
-              .muln(
-                Math.pow(
-                  10,
-                  baseBank.mintDecimals - this.ravenCache!.market.baseDecimals
-                )
-              );
+              .mul(market.baseLotSize)
+              .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
             /*
             console.log(
@@ -867,15 +831,13 @@ export class Router {
 
             if (nativeBase.gte(otherAmountThreshold)) {
               return {
-                label: "rvn-USDC-tBTC",
+                label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
                   {
                     label: "raven",
                     fee: {
                       amount: quoteFee,
-                      mint: new PublicKey(
-                        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-                      ),
+                      mint: quoteMint,
                       rate: 0.0006,
                     },
                   },
@@ -893,35 +855,29 @@ export class Router {
                     quoteMint,
                     wallet
                   );
-                  const program = new Program(
-                    ravenIdl as Idl,
-                    "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1",
-                    userProvider
-                  );
+
                   const prepIx =
                     await createAssociatedTokenAccountIdempotentInstruction(
                       wallet,
                       wallet,
                       baseMint
                     );
-                  const tradeIx = await program.methods
+
+                  // @ts-ignore
+                  const healthRemainingAccounts = client[
+                    "buildHealthRemainingAccounts"
+                  ](group, [mangoAccount!]);
+                  const tradeIx = await raven.methods
                     .tradeJupiter(amount, false, nativeBase)
                     .accounts({
                       trader: wallet,
-                      owner: PublicKey.findProgramAddressSync(
-                        [Buffer.from("pda")],
-                        new PublicKey(
-                          "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
-                        )
-                      )[0],
-                      account: new PublicKey(
-                        "GRR9y6yBxfxqVS7xQekRk4c6KUB2ukqSM8fY8GJSSCbo"
-                      ),
-                      perpMarket: this.ravenCache!.market.publicKey,
-                      perpOracle: this.ravenCache!.market.oracle,
-                      eventQueue: this.ravenCache!.market.eventQueue,
-                      bids: this.ravenCache!.market.bids,
-                      asks: this.ravenCache!.market.asks,
+                      owner: pda,
+                      account: mangoAccount.publicKey,
+                      perpMarket: market.publicKey,
+                      perpOracle: market.oracle,
+                      eventQueue: market.eventQueue,
+                      bids: market.bids,
+                      asks: market.asks,
                       baseBank: baseBank.publicKey,
                       quoteBank: quoteBank.publicKey,
                       baseVault: baseBank.vault,
@@ -936,9 +892,13 @@ export class Router {
                     })
                     .remainingAccounts(
                       healthRemainingAccounts.map(
-                        (pk) =>
-                          ({ pubkey: pk, isWritable: false, isSigner: false } as AccountMeta),
-                      ),
+                        (pk: any) =>
+                          ({
+                            pubkey: pk,
+                            isWritable: false,
+                            isSigner: false,
+                          } as AccountMeta)
+                      )
                     )
                     .instruction();
 
@@ -948,13 +908,11 @@ export class Router {
             }
           } else {
             // SwapMode.ExactOut
-            let amountOutLots = amount.div(
-              this.ravenCache!.market.quoteLotSize
-            );
+            let amountOutLots = amount.div(market.quoteLotSize);
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
-            for (const order of this.ravenCache!.bids.items()) {
+            for (const order of booksides[0].items()) {
               sumBase.iadd(order.sizeLots);
               const orderQuoteLots = order.sizeLots.mul(order.priceLots);
               sumQuote.iadd(orderQuoteLots);
@@ -966,8 +924,6 @@ export class Router {
               }
               if (diff.isZero()) break;
             }
-
-            // const nativeBase = sumBase.mul(this.ravenCache!.m);
           }
 
           // error case no swap result has been generated
@@ -987,14 +943,95 @@ export class Router {
     this.addEdges(edges);
   }
 
+  async indexRaven(): Promise<void> {
+    // load initial cache state
+    const user = Keypair.generate();
+    const userWallet = new Wallet(user);
+    const userProvider = new AnchorProvider(this.connection, userWallet, {});
+    const client = MangoClient.connect(
+      // @ts-ignore
+      userProvider,
+      "mainnet-beta",
+      MANGO_V4_ID["mainnet-beta"],
+      {
+        idsSource: "get-program-accounts",
+      }
+    );
+    const group = await client.getGroup(
+      new PublicKey("78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX")
+    );
+    const ravenPk = "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1";
+    const program = new Program(ravenIdl as Idl, ravenPk, userProvider);
+    const pda = PublicKey.findProgramAddressSync(
+      [Buffer.from("pda")],
+      new PublicKey(ravenPk)
+    )[0];
+    const mangoAccount = await client.getMangoAccountForOwner(
+      group,
+      pda,
+      0 /* First Mango account created */
+    );
+    await mangoAccount!.reload(client);
+
+    await this.addRavenEdges(
+      program,
+      pda,
+      client,
+      group,
+      mangoAccount!,
+      "BTC-PERP",
+      "tbtc",
+      "usdc",
+      new PublicKey("6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"),
+      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+    );
+    await this.addRavenEdges(
+      program,
+      pda,
+      client,
+      group,
+      mangoAccount!,
+      "SOL-PERP",
+      "wsol",
+      "usdc",
+      new PublicKey("So11111111111111111111111111111111111111112"),
+      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+    );
+    await this.addRavenEdges(
+      program,
+      pda,
+      client,
+      group,
+      mangoAccount!,
+      "ETH-PERP",
+      "eth",
+      "usdc",
+      new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
+      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+    );
+
+    await this.addRavenEdges(
+      program,
+      pda,
+      client,
+      group,
+      mangoAccount!,
+      "RNDR-PERP",
+      "rndr",
+      "usdc",
+      new PublicKey("rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof"),
+      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+    );
+  }
+
   async indexRaydium(): Promise<void> {
     const response = await fetch("https://api.raydium.io/v2/ammV3/ammPools", {
       method: "GET",
     });
-    const poolData = (await response.json()).data as ApiAmmV3PoolsItem[];
+    const poolData = (await response.json()).data as ApiClmmPoolsItem[];
 
     // TODO: Do not trust the tvl and instead look it up like with jupiter prices
-    const poolsFilteredByTvl = poolData.filter((p: ApiAmmV3PoolsItem) => {
+    const poolsFilteredByTvl = poolData.filter((p: ApiClmmPoolsItem) => {
       return p.tvl > this.minTvl;
     });
     console.log(
@@ -1007,7 +1044,7 @@ export class Router {
       "USD"
     );
 
-    const poolInfos = await AmmV3.fetchMultiplePoolInfos({
+    const poolInfos = await Clmm.fetchMultiplePoolInfos({
       connection: this.connection,
       poolKeys: poolsFilteredByTvl,
       ownerInfo: undefined,
@@ -1015,7 +1052,7 @@ export class Router {
       batchRequest: false,
       updateOwnerRewardAndFee: true,
     });
-    const poolTickArrays = await AmmV3.fetchMultiplePoolTickArrays({
+    const poolTickArrays = await Clmm.fetchMultiplePoolTickArrays({
       connection: this.connection,
       poolKeys: poolsFilteredByTvl.map((p) => poolInfos[p.id].state),
       batchRequest: false,

@@ -283,14 +283,14 @@
     "@coral-xyz/anchor" "^0.26.0"
     buffer "^6.0.1"
 
-"@raydium-io/raydium-sdk@^1.3.1-beta.8":
-  version "1.3.1-beta.8"
-  resolved "https://registry.yarnpkg.com/@raydium-io/raydium-sdk/-/raydium-sdk-1.3.1-beta.8.tgz#f3af2e6c04cfe36677310e7a3cb37d2b2ec9e2f6"
-  integrity sha512-emBu9sxyKOgUIdy1706+6VxqhXA7BmTjG+jhF+G+BDiuu6olYJ3hFoceMHzNMlNYbWkGBo3GSKKyzjaX0u6D5w==
+"@raydium-io/raydium-sdk@^1.3.1-beta.25":
+  version "1.3.1-beta.25"
+  resolved "https://registry.yarnpkg.com/@raydium-io/raydium-sdk/-/raydium-sdk-1.3.1-beta.25.tgz#5e7bdaede39de6d40cf3da8bbb8babd55ca8a143"
+  integrity sha512-xrGleP+dfr+5C3xZIuwfZkvLUBp3n124G+JA/Eie/WU9697HUfNXEeAuaQ0ebJoRIhbZZpbE4y2B6P+UE+UWKg==
   dependencies:
     "@solana/buffer-layout" "^4.0.1"
-    "@solana/spl-token" "^0.3.7"
-    axios "^1.2.6"
+    "@solana/spl-token" "^0.3.8"
+    axios "^1.5.0"
     big.js "^6.2.1"
     bn.js "^5.2.1"
     decimal.js "^10.4.3"
@@ -337,7 +337,7 @@
     "@solana/buffer-layout-utils" "^0.2.0"
     buffer "^6.0.3"
 
-"@solana/spl-token@^0.3.7":
+"@solana/spl-token@^0.3.8":
   version "0.3.8"
   resolved "https://registry.yarnpkg.com/@solana/spl-token/-/spl-token-0.3.8.tgz#8e9515ea876e40a4cc1040af865f61fc51d27edf"
   integrity sha512-ogwGDcunP9Lkj+9CODOWMiVJEdRtqHAtX2rWF62KxnnSWtMZtV9rDhTrZFshiyJmxDnRL/1nKE1yJHg4jjs3gg==
@@ -388,7 +388,7 @@
     rpc-websockets "^7.5.1"
     superstruct "^0.14.2"
 
-"@solana/web3.js@^1.31.0", "@solana/web3.js@^1.70.1":
+"@solana/web3.js@^1.31.0":
   version "1.73.0"
   resolved "https://registry.yarnpkg.com/@solana/web3.js/-/web3.js-1.73.0.tgz#c65f9f954ac80fca6952765c931dd72e57e1b572"
   integrity sha512-YrgX3Py7ylh8NYkbanoINUPCj//bWUjYZ5/WPy9nQ9SK3Cl7QWCR+NmbDjmC/fTspZGR+VO9LTQslM++jr5PRw==
@@ -410,7 +410,7 @@
     rpc-websockets "^7.5.0"
     superstruct "^0.14.2"
 
-"@solana/web3.js@^1.78.2":
+"@solana/web3.js@^1.78.2", "@solana/web3.js@^1.87.4":
   version "1.87.4"
   resolved "https://registry.yarnpkg.com/@solana/web3.js/-/web3.js-1.87.4.tgz#fd9ef20ff84d5e35306c4313a35a1b7ce6b39be2"
   integrity sha512-YlC8kjY0LRmqR0cy5cjRI4tupk6k8284MesQWE8GWKNwFAAjzgXWeIodKo4ep5DH7hpRJ16nuuRziy54ImF5UA==
@@ -616,10 +616,10 @@ asynckit@^0.4.0:
   resolved "https://registry.yarnpkg.com/asynckit/-/asynckit-0.4.0.tgz#c79ed97f7f34cb8f2ba1bc9790bcc366474b4b79"
   integrity sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==
 
-axios@^1.2.6:
-  version "1.4.0"
-  resolved "https://registry.yarnpkg.com/axios/-/axios-1.4.0.tgz#38a7bf1224cd308de271146038b551d725f0be1f"
-  integrity sha512-S4XCWMEmzvo64T9GfvQDOXgYRDJ/wsSZc7Jvdgx5u1sd0JwsuPLqb3SYmusag+edF6ziyMensPVqLTSc1PiSEA==
+axios@^1.5.0:
+  version "1.6.0"
+  resolved "https://registry.yarnpkg.com/axios/-/axios-1.6.0.tgz#f1e5292f26b2fd5c2e66876adc5b06cdbd7d2102"
+  integrity sha512-EZ1DYihju9pwVB+jg67ogm+Tmqc6JmhamRN6I4Zt8DfZu5lbcQGw3ozH9lFejSJgs/ibaef3A9PMXPLeefFGJg==
   dependencies:
     follow-redirects "^1.15.0"
     form-data "^4.0.0"

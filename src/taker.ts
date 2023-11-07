@@ -18,12 +18,44 @@ import {
   PublicKey,
   Keypair,
   Transaction,
+  VersionedTransaction,
+  TransactionMessage,
 } from "@solana/web3.js";
 
 import { DepthResult, Router, SwapMode, SwapResult } from "./router";
 
-const { CLUSTER, GROUP, MAX_ROUTES, MIN_TVL, PORT, RPC_URL, KEYPAIR } =
-  process.env;
+const {
+  CLUSTER,
+  GROUP,
+  MAX_ROUTES,
+  MIN_TVL,
+  PORT,
+  RPC_URL,
+  KEYPAIR,
+  MINT,
+  SIZE,
+  DISCORD_WEBHOOK_URL,
+} = process.env;
+
+import axios from "axios";
+import { json } from "stream/consumers";
+
+export function alertDiscord(message: string) {
+  if (DISCORD_WEBHOOK_URL) {
+    axios
+      .post(DISCORD_WEBHOOK_URL, {
+        content: message,
+      })
+      .then((response) => {
+        console.log("Message sent to Alerts:", message, response.data);
+      })
+      .catch((error) => {
+        console.error("Error sending message to Discord:", error);
+      });
+  } else {
+    console.log(message);
+  }
+}
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
 const groupPk = new PublicKey(
@@ -43,7 +75,7 @@ async function main() {
 
   // init mango
   const mangoClient = await MangoClient.connect(
-    anchorProvider,
+    anchorProvider as any,
     cluster,
     MANGO_V4_ID[cluster],
     {
@@ -64,7 +96,7 @@ async function main() {
             `Undefined accountInfo object in onAccountChange(bank.oracle) for ${bank.oracle.toString()}!`
           );
         const { price, uiPrice } = await group["decodePriceFromOracleAi"](
-          coder,
+          coder as any,
           bank.oracle,
           ai,
           group.getMintDecimals(bank.mint),
@@ -82,86 +114,120 @@ async function main() {
   await router.start();
 
   while (true) {
-    const inputMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-    const inputMintPk = new PublicKey(inputMint);
-    const outputMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-    const outputMintPk = new PublicKey(outputMint);
-    const mode = SwapMode.ExactIn;
-    const slippage = 0.0001;
-    // const amount = new BN(10000 * 100);
-    const amount = new BN(1000000 * 100);
-    const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
-    let referencePrice: number | undefined;
-    if (
-      group.banksMapByMint.has(inputMint) &&
-      group.banksMapByMint.has(outputMint)
-    ) {
-      const inputBank = group.banksMapByMint.get(inputMint)![0];
-      const outputBank = group.banksMapByMint.get(outputMint)![0];
+    try {
+      const inputMint = MINT!;
+      const inputMintPk = new PublicKey(inputMint);
+      const outputMint = MINT!;
+      const outputMintPk = new PublicKey(outputMint);
+      const mode = SwapMode.ExactIn;
+      const slippage = 0.0001;
+      // const amount = new BN(10000);
+      // const amount = new BN(1000000 * 20);
+      let referencePrice: number | undefined;
+      let amount: BN | undefined;
+      if (
+        group.banksMapByMint.has(inputMint) &&
+        group.banksMapByMint.has(outputMint)
+      ) {
+        const inputBank = group.banksMapByMint.get(inputMint)![0];
+        const outputBank = group.banksMapByMint.get(outputMint)![0];
 
-      referencePrice =
-        (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
-          outputBank.uiPrice) /
-        inputBank.uiPrice;
-    }
+        referencePrice =
+          (10 ** (inputBank.mintDecimals - outputBank.mintDecimals) *
+            outputBank.uiPrice) /
+          inputBank.uiPrice;
+        amount = new BN(parseFloat(SIZE!) * 10 ** inputBank.mintDecimals);
+      }
 
-    const results = await router.swap(
-      inputMintPk,
-      outputMintPk,
-      amount,
-      otherAmountThreshold,
-      mode,
-      slippage
-    );
+      const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
 
-    const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
-    if (filtered.length == 0) continue;
-
-    let ranked: SwapResult[] = [];
-    if (mode === SwapMode.ExactIn) {
-      ranked = filtered.sort((a, b) =>
-        Number(b.minAmtOut.sub(a.minAmtOut).toString())
+      const results = await router.swap(
+        inputMintPk,
+        outputMintPk,
+        amount!,
+        otherAmountThreshold,
+        mode,
+        slippage
       );
-    } else if (mode === SwapMode.ExactOut) {
-      ranked = filtered.sort((a, b) =>
-        Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
+
+      const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
+      if (filtered.length == 0) continue;
+
+      let ranked: SwapResult[] = [];
+      if (mode === SwapMode.ExactIn) {
+        ranked = filtered.sort((a, b) =>
+          Number(b.minAmtOut.sub(a.minAmtOut).toString())
+        );
+      } else if (mode === SwapMode.ExactOut) {
+        ranked = filtered.sort((a, b) =>
+          Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
+        );
+      }
+
+      // console.log(
+      //   "ranked",
+      //   ranked.map((r) => [r.label, r.minAmtOut.toString()])
+      // );
+
+      const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
+      const instructions = await best.instructions(wallet.publicKey);
+      let priceImpact: number | undefined = undefined;
+      if (!!referencePrice) {
+        const actualPrice =
+          Number(best.maxAmtIn.toString()) / Number(best.minAmtOut.toString());
+        priceImpact = actualPrice / referencePrice - 1;
+      }
+
+      const profitable = best.minAmtOut.gte(best.maxAmtIn);
+
+      console.log(MINT, profitable, best.label, best.minAmtOut.toString());
+
+      if (profitable) {
+        const response = await connection.getLatestBlockhash("finalized");
+
+        const messageV0 = new TransactionMessage({
+          payerKey: keyPair.publicKey,
+          recentBlockhash: response.blockhash,
+          instructions,
+        }).compileToV0Message(group.addressLookupTablesList);
+
+        const transaction = new VersionedTransaction(messageV0);
+        transaction.sign([keyPair]);
+
+        const sig = await connection.sendTransaction(transaction, {
+          skipPreflight: true,
+        });
+
+        alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
+        const confirmationResult = await connection.confirmTransaction({
+          blockhash: response.blockhash,
+          lastValidBlockHeight: response.lastValidBlockHeight,
+          signature: sig,
+        });
+        if (confirmationResult.value.err) {
+          alertDiscord(
+            `😭  failed ${MINT} ${best.label} ${sig} ${JSON.stringify(
+              confirmationResult.value.err
+            )}`
+          );
+          await sleep(60000);
+        } else {
+          alertDiscord(
+            `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
+          );
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      alertDiscord(
+        `☢️  error ${MINT} ${e.message} ${
+          e.stack
+        } ${e.toString()} ${JSON.stringify(e)}`
       );
+      await sleep(60000);
     }
 
-    // console.log(
-    //   "ranked",
-    //   ranked.map((r) => [r.label, r.minAmtOut.toString()])
-    // );
-
-    const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
-    const ins = await best.instructions(wallet.publicKey);
-    let priceImpact: number | undefined = undefined;
-    if (!!referencePrice) {
-      const actualPrice =
-        Number(best.maxAmtIn.toString()) / Number(best.minAmtOut.toString());
-      priceImpact = actualPrice / referencePrice - 1;
-    }
-
-    const profitable = best.minAmtOut.gt(best.maxAmtIn);
-
-    console.log(profitable, best.label, best.minAmtOut.toString());
-
-    await sleep(1000);
-
-    /*
-    const tx = new Transaction();
-    const response = await connection.getLatestBlockhash("finalized");
-    tx.recentBlockhash = response.blockhash;
-    tx.add(...ins);
-    tx.sign(keyPair);
-  
-    const sig = await connection.sendTransaction(tx, [keyPair], {
-      skipPreflight: true,
-    });
-    console.log("send", sig);
-    const confirmationResult = await connection.confirmTransaction(sig);
-    console.log("confirmed", confirmationResult);
-    */
+    await sleep(100);
   }
 }
 
