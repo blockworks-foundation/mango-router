@@ -120,7 +120,7 @@ async function main() {
       const outputMint = MINT!;
       const outputMintPk = new PublicKey(outputMint);
       const mode = SwapMode.ExactIn;
-      const slippage = 0.00001;
+      const slippage = 0.0001;
       // const amount = new BN(10000);
       // const amount = new BN(1000000 * 20);
       let referencePrice: number | undefined;
@@ -178,9 +178,7 @@ async function main() {
         priceImpact = actualPrice / referencePrice - 1;
       }
 
-      const profitable = best.minAmtOut.gte(
-        best.maxAmtIn.muln(1e7 * (1 + 2 * slippage)).divn(1e7)
-      );
+      const profitable = best.minAmtOut.gte(best.maxAmtIn);
 
       console.log(MINT, profitable, best.label, best.minAmtOut.toString());
 
