@@ -44,9 +44,6 @@ import {
   SqrtPriceMath,
   TOKEN_PROGRAM_ID,
   fetchMultipleMintInfos,
-  MIN_SQRT_PRICE_X64,
-  ONE,
-  MAX_SQRT_PRICE_X64,
 } from "@raydium-io/raydium-sdk";
 import {
   AccountMeta,
@@ -60,6 +57,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
 import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
+const RAVEN_FEE_BPS = 7;
 
 export interface DepthResult {
   label: string;
@@ -650,7 +648,7 @@ export class Router {
             const nativeQuote = sumQuote
               .mul(market.quoteLotSize)
               .muln(10000)
-              .divn(10006);
+              .divn(10000 + RAVEN_FEE_BPS);
             const feeQuote = sumQuote.mul(market.quoteLotSize).sub(nativeQuote);
 
             /*
@@ -672,12 +670,12 @@ export class Router {
                     fee: {
                       amount: feeQuote,
                       mint: quoteMint,
-                      rate: 0.0006,
+                      rate: 0.0001 * RAVEN_FEE_BPS,
                     },
                   },
                 ],
                 maxAmtIn: nativeBase,
-                minAmtOut: nativeQuote,
+                minAmtOut: nativeQuote.muln(1e7 * (1 - slippage)).divn(1e7),
                 mints: [],
                 ok: true,
                 instructions: async (wallet: PublicKey) => {
@@ -783,8 +781,9 @@ export class Router {
           mode: SwapMode,
           slippage: number
         ): Promise<SwapResult> => {
+          // TODO: make this aware of slippage
           if (mode === SwapMode.ExactIn) {
-            let quoteFee = amount.muln(6).divn(10000);
+            let quoteFee = amount.muln(RAVEN_FEE_BPS).divn(10000);
             let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
 
@@ -838,7 +837,7 @@ export class Router {
                     fee: {
                       amount: quoteFee,
                       mint: quoteMint,
-                      rate: 0.0006,
+                      rate: 0.0001 * RAVEN_FEE_BPS,
                     },
                   },
                 ],
