@@ -663,7 +663,7 @@ export class Router {
 
             if (nativeQuote.gte(otherAmountThreshold)) {
               return {
-                label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
+                label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
                 marketInfos: [
                   {
                     label: "raven",
