@@ -20,6 +20,8 @@ import {
   Transaction,
   VersionedTransaction,
   TransactionMessage,
+  ComputeBudgetInstruction,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 
 import { DepthResult, Router, SwapMode, SwapResult } from "./router";
@@ -194,7 +196,11 @@ async function main() {
         const messageV0 = new TransactionMessage({
           payerKey: keyPair.publicKey,
           recentBlockhash: response.blockhash,
-          instructions,
+          instructions: [
+            ...instructions,
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
+          ],
         }).compileToV0Message(group.addressLookupTablesList);
 
         const transaction = new VersionedTransaction(messageV0);

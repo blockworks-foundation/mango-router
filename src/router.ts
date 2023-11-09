@@ -284,9 +284,9 @@ class RaydiumEdge implements Edge {
       let feeRate: number;
       let remainingAccounts: PublicKey[];
 
+      const poolInfo =
+        this.raydiumCache.poolInfos[this.poolPk.toBase58()].state;
       if (mode === SwapMode.ExactIn) {
-        const poolInfo =
-          this.raydiumCache.poolInfos[this.poolPk.toBase58()].state;
         let amountOut: ReturnTypeComputeAmountOut = Clmm.computeAmountOut({
           poolInfo,
           tickArrayCache:
@@ -304,8 +304,6 @@ class RaydiumEdge implements Edge {
         minAmtOut = amountOut.minAmountOut.amount;
         remainingAccounts = amountOut.remainingAccounts;
       } else {
-        const poolInfo =
-          this.raydiumCache.poolInfos[this.poolPk.toBase58()].state;
         let amountIn: ReturnTypeComputeAmountOutBaseOut = Clmm.computeAmountIn({
           poolInfo,
           tickArrayCache:
@@ -325,18 +323,20 @@ class RaydiumEdge implements Edge {
       }
 
       let instructions = async (wallet: PublicKey) => {
-        const tokenIn = await getAssociatedTokenAddress(this.inputMint, wallet);
-        const tokenOut = await getAssociatedTokenAddress(
-          this.outputMint,
+        const tokenAccountA = await getAssociatedTokenAddress(
+          poolInfo.mintA.mint,
           wallet
         );
-
+        const tokenAccountB = await getAssociatedTokenAddress(
+          poolInfo.mintB.mint,
+          wallet
+        );
         const swapIx = Clmm.makeSwapBaseInInstructions({
           poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
           ownerInfo: {
-            wallet: wallet,
-            tokenAccountA: tokenIn,
-            tokenAccountB: tokenOut,
+            wallet,
+            tokenAccountA,
+            tokenAccountB,
           },
           inputMint: this.inputMint,
           amountIn: amount,
@@ -696,13 +696,6 @@ export class Router {
                     wallet
                   );
 
-                  const prepIx =
-                    await createAssociatedTokenAccountIdempotentInstruction(
-                      wallet,
-                      wallet,
-                      quoteMint
-                    );
-
                   // @ts-ignore
                   const healthRemainingAccounts = client[
                     "buildHealthRemainingAccounts"
@@ -743,7 +736,7 @@ export class Router {
                     )
                     .instruction();
 
-                  return [prepIx, tradeIx];
+                  return [tradeIx];
                 },
               };
             }
@@ -864,13 +857,6 @@ export class Router {
                     wallet
                   );
 
-                  const prepIx =
-                    await createAssociatedTokenAccountIdempotentInstruction(
-                      wallet,
-                      wallet,
-                      baseMint
-                    );
-
                   // @ts-ignore
                   const healthRemainingAccounts = client[
                     "buildHealthRemainingAccounts"
@@ -910,7 +896,7 @@ export class Router {
                     )
                     .instruction();
 
-                  return [prepIx, tradeIx];
+                  return [tradeIx];
                 },
               };
             }
