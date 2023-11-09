@@ -180,7 +180,13 @@ async function main() {
 
       const profitable = best.minAmtOut.gte(best.maxAmtIn);
 
-      console.log(MINT, profitable, best.label, best.minAmtOut.toString());
+      console.log(
+        new Date(),
+        MINT,
+        profitable,
+        best.label,
+        best.minAmtOut.toString()
+      );
 
       if (profitable) {
         const response = await connection.getLatestBlockhash("finalized");

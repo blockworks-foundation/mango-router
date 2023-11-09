@@ -218,8 +218,8 @@ class WhirlpoolEdge implements Edge {
         mints: [this.inputMint, this.outputMint],
       };
     } catch (e) {
-      // console.log(
-      //   "could not swap",
+      // console.error(
+      //   "whirpool error swap",
       //   this.poolPk.toString().slice(0, 6),
       //   this.inputMint.toString().slice(0, 6),
       //   this.outputMint.toString().slice(0, 6),
@@ -297,7 +297,7 @@ class RaydiumEdge implements Edge {
           amountIn: amount,
           slippage: slippage,
         });
-        ok = otherAmountThreshold.gte(amountOut.amountOut.amount);
+        ok = otherAmountThreshold.lte(amountOut.amountOut.amount);
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
@@ -316,7 +316,7 @@ class RaydiumEdge implements Edge {
           amountOut: amount,
           slippage: slippage,
         });
-        ok = otherAmountThreshold.lte(amountIn.amountIn.amount);
+        ok = otherAmountThreshold.gte(amountIn.amountIn.amount);
         fee = amountIn.fee;
         maxAmtIn = amountIn.maxAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
@@ -366,6 +366,14 @@ class RaydiumEdge implements Edge {
         mints: [this.inputMint, this.outputMint],
       };
     } catch (err) {
+      // console.error(
+      //   "raydium error swap",
+      //   this.poolPk.toString().slice(0, 6),
+      //   this.inputMint.toString().slice(0, 6),
+      //   this.outputMint.toString().slice(0, 6),
+      //   amount.toNumber(),
+      //   otherAmountThreshold.toNumber()
+      // );
       return {
         ok: false,
         label: "",
@@ -760,6 +768,7 @@ export class Router {
           }
 
           // error case no swap result has been generated
+          // console.error(`error raven swap ${baseMintLabel}-${quoteMintLabel}`);
           return {
             ok: false,
             label: "",
@@ -926,6 +935,7 @@ export class Router {
           }
 
           // error case no swap result has been generated
+          // console.error(`error raven swap ${quoteMintLabel}-${baseMintLabel}`);
           return {
             ok: false,
             label: "",
