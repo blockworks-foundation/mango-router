@@ -143,15 +143,11 @@
         {
           "name": "amount",
           "type": "u64"
-        },
-        {
-          "name": "reduceOnly",
-          "type": "bool"
         }
       ]
     },
     {
-      "name": "collectFees",
+      "name": "withdraw",
       "accounts": [
         {
           "name": "group",
@@ -217,10 +213,6 @@
         {
           "name": "amount",
           "type": "u64"
-        },
-        {
-          "name": "allowBorrow",
-          "type": "bool"
         }
       ]
     },
@@ -359,26 +351,17 @@
         {
           "name": "baseOracle",
           "isMut": false,
-          "isSigner": false,
-          "docs": [
-            "We still verify that it is the correct oracle both for spot and perp"
-          ]
+          "isSigner": false
         },
         {
           "name": "quoteOracle",
           "isMut": false,
-          "isSigner": false,
-          "docs": [
-            "We still verify that it is the correct oracle both for spot and perp"
-          ]
+          "isSigner": false
         },
         {
           "name": "perpOracle",
           "isMut": false,
-          "isSigner": false,
-          "docs": [
-            "We still verify that it is the correct oracle both for spot and perp"
-          ]
+          "isSigner": false
         },
         {
           "name": "group",
@@ -408,11 +391,11 @@
       ],
       "args": [
         {
-          "name": "amountInAtoms",
+          "name": "exactInAtoms",
           "type": "i64"
         },
         {
-          "name": "isBase",
+          "name": "isBaseIn",
           "type": "bool"
         },
         {

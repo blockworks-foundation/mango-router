@@ -3,9 +3,11 @@ import {
   BookSideType,
   Group,
   MANGO_V4_ID,
+  MANGO_V4_MAIN_GROUP,
   MangoAccount,
   MangoClient,
   PerpMarket,
+  USDC_MINT,
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddress,
   toUiDecimals,
@@ -57,6 +59,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
 import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
+import { RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS } from "./constants";
 const RAVEN_FEE_BPS = 7;
 
 export interface DepthResult {
@@ -702,7 +705,7 @@ export class Router {
                   ](group, [mangoAccount]);
 
                   const tradeIx = await raven.methods
-                    .tradeJupiter(nativeBase, true, nativeQuote)
+                    .tradeExactIn(nativeBase, true, nativeQuote)
                     .accounts({
                       trader: wallet,
                       owner: pda,
@@ -785,6 +788,8 @@ export class Router {
         ): Promise<SwapResult> => {
           // TODO: make this aware of slippage
           if (mode === SwapMode.ExactIn) {
+            // TODO: Update raven fee
+
             let quoteFee = amount.muln(RAVEN_FEE_BPS).divn(10000);
             let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
@@ -862,7 +867,7 @@ export class Router {
                     "buildHealthRemainingAccounts"
                   ](group, [mangoAccount!]);
                   const tradeIx = await raven.methods
-                    .tradeJupiter(amount, false, nativeBase)
+                    .tradeExactIn(amount, false, nativeBase)
                     .accounts({
                       trader: wallet,
                       owner: pda,
@@ -953,24 +958,19 @@ export class Router {
       }
     );
     const group = await client.getGroup(
-      new PublicKey("78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX")
+      MANGO_V4_MAIN_GROUP,
     );
-    const ravenPk = "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1";
-    const program = new Program(ravenIdl as Idl, ravenPk, userProvider);
-    const pda = PublicKey.findProgramAddressSync(
-      [Buffer.from("pda")],
-      new PublicKey(ravenPk)
-    )[0];
+    const program = new Program(ravenIdl as Idl, RAVEN_PROGRAM_ADDRESS, userProvider);
     const mangoAccount = await client.getMangoAccountForOwner(
       group,
-      pda,
+      RAVEN_MANGO_ACCOUNT_OWNER,
       0 /* First Mango account created */
     );
     await mangoAccount!.reload(client);
 
     await this.addRavenEdges(
       program,
-      pda,
+      RAVEN_MANGO_ACCOUNT_OWNER,
       client,
       group,
       mangoAccount!,
@@ -978,11 +978,11 @@ export class Router {
       "tbtc",
       "usdc",
       new PublicKey("6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"),
-      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+      USDC_MINT,
     );
     await this.addRavenEdges(
       program,
-      pda,
+      RAVEN_MANGO_ACCOUNT_OWNER,
       client,
       group,
       mangoAccount!,
@@ -990,11 +990,11 @@ export class Router {
       "wsol",
       "usdc",
       new PublicKey("So11111111111111111111111111111111111111112"),
-      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+      USDC_MINT,
     );
     await this.addRavenEdges(
       program,
-      pda,
+      RAVEN_MANGO_ACCOUNT_OWNER,
       client,
       group,
       mangoAccount!,
@@ -1002,12 +1002,12 @@ export class Router {
       "eth",
       "usdc",
       new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
-      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+      USDC_MINT,
     );
 
     await this.addRavenEdges(
       program,
-      pda,
+      RAVEN_MANGO_ACCOUNT_OWNER,
       client,
       group,
       mangoAccount!,
@@ -1015,7 +1015,7 @@ export class Router {
       "rndr",
       "usdc",
       new PublicKey("rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof"),
-      new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+      USDC_MINT,
     );
   }
 
