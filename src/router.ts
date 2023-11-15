@@ -745,22 +745,16 @@ export class Router {
             }
           } else {
             // SwapMode.ExactOut
-            let amountOutLots = amount.div(market.quoteLotSize);
-
-            const sumBase = new BN(0);
-            const sumQuote = new BN(0);
-            for (const order of booksides[0].items()) {
-              sumBase.iadd(order.sizeLots);
-              const orderQuoteLots = order.sizeLots.mul(order.priceLots);
-              sumQuote.iadd(orderQuoteLots);
-              const diff = sumQuote.sub(amountOutLots);
-              if (!diff.isNeg()) {
-                const extra = orderQuoteLots.sub(diff);
-                sumBase.isub(extra.div(order.priceLots));
-                break;
-              }
-              if (diff.isZero()) break;
-            }
+            // Not yet implemented in the program side.
+            return {
+              ok: false,
+              label: "",
+              marketInfos: [],
+              maxAmtIn: amount,
+              minAmtOut: otherAmountThreshold,
+              mints: [],
+              instructions: async () => [],
+            };
           }
 
           // error case no swap result has been generated
@@ -788,8 +782,9 @@ export class Router {
         ): Promise<SwapResult> => {
           // TODO: make this aware of slippage
           if (mode === SwapMode.ExactIn) {
-            // TODO: Update raven fee
-
+            // This is just an estimation of the fee. On exact quote in, the fee
+            // is handled by reducing the trade size, often rounding down to the
+            // nearest lot.
             let quoteFee = amount.muln(RAVEN_FEE_BPS).divn(10000);
             let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
@@ -907,22 +902,16 @@ export class Router {
             }
           } else {
             // SwapMode.ExactOut
-            let amountOutLots = amount.div(market.quoteLotSize);
-
-            const sumBase = new BN(0);
-            const sumQuote = new BN(0);
-            for (const order of booksides[0].items()) {
-              sumBase.iadd(order.sizeLots);
-              const orderQuoteLots = order.sizeLots.mul(order.priceLots);
-              sumQuote.iadd(orderQuoteLots);
-              const diff = sumQuote.sub(amountOutLots);
-              if (!diff.isNeg()) {
-                const extra = orderQuoteLots.sub(diff);
-                sumBase.isub(extra.div(order.priceLots));
-                break;
-              }
-              if (diff.isZero()) break;
-            }
+            // ExactOut not yet implemented in program.
+            return {
+              ok: false,
+              label: "",
+              marketInfos: [],
+              maxAmtIn: amount,
+              minAmtOut: otherAmountThreshold,
+              mints: [],
+              instructions: async () => [],
+            };
           }
 
           // error case no swap result has been generated
