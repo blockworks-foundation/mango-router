@@ -8,7 +8,6 @@ import {
   MangoClient,
   PerpMarket,
   USDC_MINT,
-  createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddress,
   toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
@@ -59,8 +58,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
 import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
-import { RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS } from "./constants";
-const RAVEN_FEE_BPS = 7;
+import { POSITION_INCREASE_RAVEN_FEE_BPS, MANGO_BORROW_FEE_BPS, MANGO_TAKER_FEE_BPS, RAVEN_FEE_BPS, RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS } from "./constants";
 
 export interface DepthResult {
   label: string;
@@ -656,10 +654,11 @@ export class Router {
             const nativeBase = amountInLots
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
+            // TODO: Fix the fees to accurately reflect whether a borrow and extra fee is needed.
             const nativeQuote = sumQuote
               .mul(market.quoteLotSize)
               .muln(10000)
-              .divn(10000 + RAVEN_FEE_BPS);
+              .divn(10000 + (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS));
             const feeQuote = sumQuote.mul(market.quoteLotSize).sub(nativeQuote);
 
             /*
@@ -681,7 +680,7 @@ export class Router {
                     fee: {
                       amount: feeQuote,
                       mint: quoteMint,
-                      rate: 0.0001 * RAVEN_FEE_BPS,
+                      rate: 0.0001 * (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS),
                     },
                   },
                 ],
@@ -785,7 +784,7 @@ export class Router {
             // This is just an estimation of the fee. On exact quote in, the fee
             // is handled by reducing the trade size, often rounding down to the
             // nearest lot.
-            let quoteFee = amount.muln(RAVEN_FEE_BPS).divn(10000);
+            let quoteFee = amount.muln(RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS).divn(10000);
             let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
             // console.log("amt", amount.toString(), amountInLots.toString());
 
@@ -839,7 +838,8 @@ export class Router {
                     fee: {
                       amount: quoteFee,
                       mint: quoteMint,
-                      rate: 0.0001 * RAVEN_FEE_BPS,
+                      // Approximation only. Actual amount depends on what is input.
+                      rate: 0.0001 * (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS)
                     },
                   },
                 ],
