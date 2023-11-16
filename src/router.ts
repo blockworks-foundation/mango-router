@@ -58,7 +58,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
 import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
-import { POSITION_INCREASE_RAVEN_FEE_BPS, MANGO_BORROW_FEE_BPS, MANGO_TAKER_FEE_BPS, RAVEN_FEE_BPS, RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS } from "./constants";
+import { POSITION_INCREASE_RAVEN_FEE_BPS, MANGO_BORROW_FEE_BPS, MANGO_TAKER_FEE_BPS, RAVEN_FEE_BPS, RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS, RAVEN_MANGO_ACCOUNT } from "./constants";
 
 export interface DepthResult {
   label: string;
@@ -609,6 +609,28 @@ export class Router {
       )
     );
 
+    await mangoAccount.reload(client);
+    const ravenPositions = {
+      perpLots: mangoAccount.perpPositionExistsForMarket(market) ? market.uiBaseToLots(mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)): new BN(0),
+      baseNative: mangoAccount.getTokenBalanceUi(baseBank) * Math.pow(10, baseBank.mintDecimals),
+      quoteNative: mangoAccount.getTokenBalanceUi(quoteBank) * Math.pow(10, quoteBank.mintDecimals),
+    };
+    this.subscriptions.push(
+      this.connection.onAccountChange(
+        RAVEN_MANGO_ACCOUNT,
+        (acc) => {
+          const mangoAccount = client.program.account.mangoAccount.coder.accounts.decode(
+            "mangoAccount",
+            acc.data
+          );
+          ravenPositions.perpLots = mangoAccount.perpPositionExistsForMarket(market) ? market.uiBaseToLots(mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)): new BN(0);
+          ravenPositions.baseNative = mangoAccount.getTokenBalanceUi(baseBank) * Math.pow(10, baseBank.mintDecimals);
+          ravenPositions.quoteNative = mangoAccount.getTokenBalanceUi(quoteBank) * Math.pow(10, quoteBank.mintDecimals);
+        },
+        "processed"
+      )
+    );
+
     // create edges
     const edges = [
       {
@@ -625,27 +647,16 @@ export class Router {
             let amountInLots = amount
               .divn(Math.pow(10, baseBank.mintDecimals - market.baseDecimals))
               .div(market.baseLotSize);
-            // console.log("amt", amount.toString(), amountInLots.toString());
 
-            const sumBase = new BN(0);
-            const sumQuote = new BN(0);
+            const sumBaseLots = new BN(0);
+            const sumQuoteLots = new BN(0);
             for (const order of booksides[0].items()) {
-              /*
-              console.log(
-                "order",
-                order.sizeLots.toString(),
-                order.priceLots.toString(),
-                sumBase.toString(),
-                sumQuote.toString()
-              );
-              */
-              sumBase.iadd(order.sizeLots);
-              sumQuote.iadd(order.sizeLots.mul(order.priceLots));
+              sumBaseLots.iadd(order.sizeLots);
+              sumQuoteLots.iadd(order.sizeLots.mul(order.priceLots));
 
-              const diff = sumBase.sub(amountInLots);
-              // console.log("diff", diff.toString());
+              const diff = sumBaseLots.sub(amountInLots);
               if (!diff.isNeg()) {
-                sumQuote.isub(diff.mul(order.priceLots));
+                sumQuoteLots.isub(diff.mul(order.priceLots));
                 break;
               }
               if (diff.isZero()) break;
@@ -654,22 +665,17 @@ export class Router {
             const nativeBase = amountInLots
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
-            // TODO: Fix the fees to accurately reflect whether a borrow and extra fee is needed.
-            const nativeQuote = sumQuote
-              .mul(market.quoteLotSize)
-              .muln(10000)
-              .divn(10000 + (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS));
-            const feeQuote = sumQuote.mul(market.quoteLotSize).sub(nativeQuote);
+            const nativeQuoteFromPerpTrade = sumQuoteLots
+              .mul(market.quoteLotSize);
+            // TODO: Fix this to prorate if we are only partially borrowing.
+            const feeBps = RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + 
+              (nativeQuoteFromPerpTrade.toNumber() > ravenPositions.quoteNative ? MANGO_BORROW_FEE_BPS : 0) +
+              (ravenPositions.perpLots.isNeg() ? POSITION_INCREASE_RAVEN_FEE_BPS : 0);
 
-            /*
-            console.log(
-              "rvn-tbtc-usdc b:",
-              nativeBase.toString(),
-              "q:",
-              nativeQuote.toString(),
-              "f:",
-              feeQuote.toString()
-            );*/
+            const nativeQuote = nativeQuoteFromPerpTrade
+              .muln(10000)
+              .divn(10000 + feeBps);
+            const feeQuote = sumQuoteLots.mul(market.quoteLotSize).sub(nativeQuote);
 
             if (nativeQuote.gte(otherAmountThreshold)) {
               return {
@@ -680,7 +686,7 @@ export class Router {
                     fee: {
                       amount: feeQuote,
                       mint: quoteMint,
-                      rate: 0.0001 * (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS),
+                      rate: 0.0001 * feeBps,
                     },
                   },
                 ],
@@ -783,28 +789,22 @@ export class Router {
           if (mode === SwapMode.ExactIn) {
             // This is just an estimation of the fee. On exact quote in, the fee
             // is handled by reducing the trade size, often rounding down to the
-            // nearest lot.
-            let quoteFee = amount.muln(RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS).divn(10000);
+            // nearest lot. Since it is an approximation, do not worry about
+            // partial borrow fee.
+            const feeBps = RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + 
+              (ravenPositions.baseNative < 0 ? MANGO_BORROW_FEE_BPS : 0) +
+              (ravenPositions.perpLots.isNeg() ? 0: POSITION_INCREASE_RAVEN_FEE_BPS);
+
+            let quoteFee = amount.muln(feeBps).divn(10000);
             let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
-            // console.log("amt", amount.toString(), amountInLots.toString());
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
             for (const order of booksides[1].items()) {
-              /*
-              console.log(
-                "order",
-                order.sizeLots.toString(),
-                order.priceLots.toString(),
-                sumBase.toString(),
-                sumQuote.toString()
-              );
-              */
               sumBase.iadd(order.sizeLots);
               sumQuote.iadd(order.sizeLots.mul(order.priceLots));
 
               const diff = sumQuote.sub(amountInLots);
-              // console.log("diff", diff.toString());
               if (!diff.isNeg()) {
                 sumBase.isub(
                   diff.add(order.priceLots.subn(1)).div(order.priceLots)
@@ -818,17 +818,6 @@ export class Router {
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
-            /*
-            console.log(
-              "rvn-usdc-tbtc b:",
-              nativeBase.toString(),
-              "q:",
-              amount.toString(),
-              "f:",
-              quoteFee.toString()
-            );
-            */
-
             if (nativeBase.gte(otherAmountThreshold)) {
               return {
                 label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
@@ -838,8 +827,7 @@ export class Router {
                     fee: {
                       amount: quoteFee,
                       mint: quoteMint,
-                      // Approximation only. Actual amount depends on what is input.
-                      rate: 0.0001 * (RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + MANGO_BORROW_FEE_BPS + POSITION_INCREASE_RAVEN_FEE_BPS)
+                      rate: 0.0001 * feeBps
                     },
                   },
                 ],
@@ -1000,7 +988,7 @@ export class Router {
       client,
       group,
       mangoAccount!,
-      "RNDR-PERP",
+      "RENDER-PERP",
       "rndr",
       "usdc",
       new PublicKey("rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof"),

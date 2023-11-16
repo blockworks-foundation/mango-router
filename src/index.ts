@@ -77,7 +77,8 @@ async function main() {
   );
 
   // init mango
-  const mangoClient = await MangoClient.connect(
+  const mangoClient = MangoClient.connect(
+    // @ts-ignore
     anchorProvider,
     cluster,
     MANGO_V4_ID[cluster],
@@ -99,6 +100,7 @@ async function main() {
             `Undefined accountInfo object in onAccountChange(bank.oracle) for ${bank.oracle.toString()}!`
           );
         const { price, uiPrice } = await group["decodePriceFromOracleAi"](
+          // @ts-ignore
           coder,
           bank.oracle,
           ai,
