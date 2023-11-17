@@ -122,7 +122,7 @@ class WhirlpoolEdge implements Edge {
   ) {}
 
   static pairFromPool(pool: Whirlpool, client: WhirlpoolClient): Edge[] {
-    const label = pool.getAddress().toString();
+    const label = "orca:" + pool.getAddress().toString();
     const fwd = new WhirlpoolEdge(
       label,
       pool.getTokenAInfo().mint,
@@ -253,7 +253,7 @@ class RaydiumEdge implements Edge {
     poolInfo: ClmmPoolInfo,
     raydiumCache: RaydiumCache
   ): Edge[] {
-    const label = "raydium: " + poolInfo.id;
+    const label = "orca: " + poolInfo.id.toString();
     const fwd = new RaydiumEdge(
       label,
       new PublicKey(poolInfo.mintA.mint),
@@ -386,14 +386,6 @@ class RaydiumEdge implements Edge {
       };
     }
   }
-}
-
-export class RavenCache {
-  constructor(
-    public market: PerpMarket,
-    public bids: BookSide,
-    public asks: BookSide
-  ) {}
 }
 
 export class RaydiumCache {
