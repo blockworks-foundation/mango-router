@@ -2,12 +2,13 @@ import {
   BookSide,
   BookSideType,
   Group,
+  I80F48,
   MANGO_V4_ID,
   MANGO_V4_MAIN_GROUP,
   MangoAccount,
   MangoClient,
-  PerpMarket,
   USDC_MINT,
+  ZERO_I80F48,
   getAssociatedTokenAddress,
   toUiDecimals,
 } from "@blockworks-foundation/mango-v4";
@@ -58,7 +59,13 @@ import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
 import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
-import { POSITION_INCREASE_RAVEN_FEE_BPS, MANGO_BORROW_FEE_BPS, MANGO_TAKER_FEE_BPS, RAVEN_FEE_BPS, RAVEN_MANGO_ACCOUNT_OWNER, RAVEN_PROGRAM_ADDRESS, RAVEN_MANGO_ACCOUNT } from "./constants";
+import {
+  RAVEN_MANGO_ACCOUNT_OWNER,
+  RAVEN_PROGRAM_ADDRESS,
+  RAVEN_MANGO_ACCOUNT,
+  RAVEN_BASE_FEE,
+  RAVEN_POSITION_INCREASE_FEE,
+} from "./constants";
 
 export interface DepthResult {
   label: string;
@@ -603,21 +610,40 @@ export class Router {
 
     await mangoAccount.reload(client);
     const ravenPositions = {
-      perpLots: mangoAccount.perpPositionExistsForMarket(market) ? market.uiBaseToLots(mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)): new BN(0),
-      baseNative: mangoAccount.getTokenBalanceUi(baseBank) * Math.pow(10, baseBank.mintDecimals),
-      quoteNative: mangoAccount.getTokenBalanceUi(quoteBank) * Math.pow(10, quoteBank.mintDecimals),
+      perpLots: mangoAccount.perpPositionExistsForMarket(market)
+        ? market.uiBaseToLots(
+            mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)
+          )
+        : new BN(0),
+      baseNative:
+        mangoAccount.getTokenBalanceUi(baseBank) *
+        Math.pow(10, baseBank.mintDecimals),
+      quoteNative:
+        mangoAccount.getTokenBalanceUi(quoteBank) *
+        Math.pow(10, quoteBank.mintDecimals),
     };
     this.subscriptions.push(
       this.connection.onAccountChange(
         RAVEN_MANGO_ACCOUNT,
         (acc) => {
-          const mangoAccount = client.program.account.mangoAccount.coder.accounts.decode(
-            "mangoAccount",
-            acc.data
-          );
-          ravenPositions.perpLots = mangoAccount.perpPositionExistsForMarket(market) ? market.uiBaseToLots(mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)): new BN(0);
-          ravenPositions.baseNative = mangoAccount.getTokenBalanceUi(baseBank) * Math.pow(10, baseBank.mintDecimals);
-          ravenPositions.quoteNative = mangoAccount.getTokenBalanceUi(quoteBank) * Math.pow(10, quoteBank.mintDecimals);
+          const mangoAccount =
+            client.program.account.mangoAccount.coder.accounts.decode(
+              "mangoAccount",
+              acc.data
+            );
+          ravenPositions.perpLots = mangoAccount.perpPositionExistsForMarket(
+            market
+          )
+            ? market.uiBaseToLots(
+                mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)
+              )
+            : new BN(0);
+          ravenPositions.baseNative =
+            mangoAccount.getTokenBalanceUi(baseBank) *
+            Math.pow(10, baseBank.mintDecimals);
+          ravenPositions.quoteNative =
+            mangoAccount.getTokenBalanceUi(quoteBank) *
+            Math.pow(10, quoteBank.mintDecimals);
         },
         "processed"
       )
@@ -657,17 +683,33 @@ export class Router {
             const nativeBase = amountInLots
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
-            const nativeQuoteFromPerpTrade = sumQuoteLots
-              .mul(market.quoteLotSize);
-            // TODO: Fix this to prorate if we are only partially borrowing.
-            const feeBps = RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + 
-              (nativeQuoteFromPerpTrade.toNumber() > ravenPositions.quoteNative ? MANGO_BORROW_FEE_BPS : 0) +
-              (ravenPositions.perpLots.isNeg() ? POSITION_INCREASE_RAVEN_FEE_BPS : 0);
+            const nativeQuoteFromPerpTrade = I80F48.fromBig(
+              sumQuoteLots.mul(market.quoteLotSize)
+            );
+            const nativeQuoteWithdrawn = nativeQuoteFromPerpTrade.sub(
+              I80F48.fromNumber(ravenPositions.quoteNative)
+            );
+            const zero = ZERO_I80F48();
+            const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
+              .add(
+                nativeQuoteWithdrawn.isPos()
+                  ? nativeQuoteWithdrawn
+                      .div(nativeQuoteFromPerpTrade)
+                      .mul(quoteBank.loanOriginationFeeRate)
+                  : zero
+              )
+              .add(
+                ravenPositions.perpLots.isNeg()
+                  ? RAVEN_POSITION_INCREASE_FEE
+                  : zero
+              );
 
             const nativeQuote = nativeQuoteFromPerpTrade
-              .muln(10000)
-              .divn(10000 + feeBps);
-            const feeQuote = sumQuoteLots.mul(market.quoteLotSize).sub(nativeQuote);
+              .mul(I80F48.fromNumber(1).sub(feeRate))
+              .toBig();
+            const feeQuote = sumQuoteLots
+              .mul(market.quoteLotSize)
+              .sub(nativeQuote);
 
             if (nativeQuote.gte(otherAmountThreshold)) {
               return {
@@ -678,7 +720,7 @@ export class Router {
                     fee: {
                       amount: feeQuote,
                       mint: quoteMint,
-                      rate: 0.0001 * feeBps,
+                      rate: feeRate.toNumber(),
                     },
                   },
                 ],
@@ -743,15 +785,6 @@ export class Router {
           } else {
             // SwapMode.ExactOut
             // Not yet implemented in the program side.
-            return {
-              ok: false,
-              label: "",
-              marketInfos: [],
-              maxAmtIn: amount,
-              minAmtOut: otherAmountThreshold,
-              mints: [],
-              instructions: async () => [],
-            };
           }
 
           // error case no swap result has been generated
@@ -777,18 +810,53 @@ export class Router {
           mode: SwapMode,
           slippage: number
         ): Promise<SwapResult> => {
-          // TODO: make this aware of slippage
           if (mode === SwapMode.ExactIn) {
-            // This is just an estimation of the fee. On exact quote in, the fee
-            // is handled by reducing the trade size, often rounding down to the
-            // nearest lot. Since it is an approximation, do not worry about
-            // partial borrow fee.
-            const feeBps = RAVEN_FEE_BPS + MANGO_TAKER_FEE_BPS + 
-              (ravenPositions.baseNative < 0 ? MANGO_BORROW_FEE_BPS : 0) +
-              (ravenPositions.perpLots.isNeg() ? 0: POSITION_INCREASE_RAVEN_FEE_BPS);
+            // Calculate upper bound estimation of the traded size
+            const sumMaxBase = new BN(0);
+            {
+              const amountInLots = amount.div(market.quoteLotSize);
+              const sumQuote = new BN(0);
+              for (const order of booksides[1].items()) {
+                sumMaxBase.iadd(order.sizeLots);
+                sumQuote.iadd(order.sizeLots.mul(order.priceLots));
 
-            let quoteFee = amount.muln(feeBps).divn(10000);
-            let amountInLots = amount.sub(quoteFee).div(market.quoteLotSize);
+                const diff = sumQuote.sub(amountInLots);
+                if (!diff.isNeg()) {
+                  sumMaxBase.isub(
+                    diff.add(order.priceLots.subn(1)).div(order.priceLots)
+                  );
+                  break;
+                }
+                if (diff.isZero()) break;
+              }
+            }
+            const nativeMaxBase = sumMaxBase.mul(market.baseLotSize);
+            const maxBaseWithdrawn = nativeMaxBase.subn(
+              ravenPositions.baseNative
+            );
+
+            const zero = ZERO_I80F48();
+            const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
+              .add(
+                maxBaseWithdrawn.isNeg()
+                  ? zero
+                  : I80F48.fromBig(maxBaseWithdrawn).div(
+                      I80F48.fromBig(nativeMaxBase)
+                    )
+              )
+              .add(
+                ravenPositions.perpLots.isNeg()
+                  ? zero
+                  : RAVEN_POSITION_INCREASE_FEE
+              );
+
+            const nativeQuote = I80F48.fromBig(amount)
+              .mul(I80F48.fromNumber(1).sub(feeRate))
+              .toBig();
+
+            let amountInLots = nativeQuote.div(market.quoteLotSize);
+
+            const feeQuote = amount.sub(amountInLots.mul(market.quoteLotSize));
 
             const sumBase = new BN(0);
             const sumQuote = new BN(0);
@@ -817,9 +885,9 @@ export class Router {
                   {
                     label: "raven",
                     fee: {
-                      amount: quoteFee,
+                      amount: feeQuote,
                       mint: quoteMint,
-                      rate: 0.0001 * feeBps
+                      rate: feeRate.toNumber(),
                     },
                   },
                 ],
@@ -883,15 +951,6 @@ export class Router {
           } else {
             // SwapMode.ExactOut
             // ExactOut not yet implemented in program.
-            return {
-              ok: false,
-              label: "",
-              marketInfos: [],
-              maxAmtIn: amount,
-              minAmtOut: otherAmountThreshold,
-              mints: [],
-              instructions: async () => [],
-            };
           }
 
           // error case no swap result has been generated
@@ -926,10 +985,12 @@ export class Router {
         idsSource: "get-program-accounts",
       }
     );
-    const group = await client.getGroup(
-      MANGO_V4_MAIN_GROUP,
+    const group = await client.getGroup(MANGO_V4_MAIN_GROUP);
+    const program = new Program(
+      ravenIdl as Idl,
+      RAVEN_PROGRAM_ADDRESS,
+      userProvider
     );
-    const program = new Program(ravenIdl as Idl, RAVEN_PROGRAM_ADDRESS, userProvider);
     const mangoAccount = await client.getMangoAccountForOwner(
       group,
       RAVEN_MANGO_ACCOUNT_OWNER,
@@ -947,7 +1008,7 @@ export class Router {
       "tbtc",
       "usdc",
       new PublicKey("6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"),
-      USDC_MINT,
+      USDC_MINT
     );
     await this.addRavenEdges(
       program,
@@ -959,7 +1020,7 @@ export class Router {
       "wsol",
       "usdc",
       new PublicKey("So11111111111111111111111111111111111111112"),
-      USDC_MINT,
+      USDC_MINT
     );
     await this.addRavenEdges(
       program,
@@ -971,7 +1032,7 @@ export class Router {
       "eth",
       "usdc",
       new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
-      USDC_MINT,
+      USDC_MINT
     );
 
     await this.addRavenEdges(
@@ -984,7 +1045,7 @@ export class Router {
       "rndr",
       "usdc",
       new PublicKey("rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof"),
-      USDC_MINT,
+      USDC_MINT
     );
   }
 
