@@ -683,8 +683,8 @@ export class Router {
             const nativeBase = amountInLots
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
-            const nativeQuoteFromPerpTrade = I80F48.fromBig(
-              sumQuoteLots.mul(market.quoteLotSize)
+            const nativeQuoteFromPerpTrade = I80F48.fromI64(
+              sumQuoteLots.mul(market.quoteLotSize).toTwos(64)
             );
             const nativeQuoteWithdrawn = nativeQuoteFromPerpTrade.sub(
               I80F48.fromNumber(ravenPositions.quoteNative)
@@ -704,9 +704,13 @@ export class Router {
                   : zero
               );
 
-            const nativeQuote = nativeQuoteFromPerpTrade
-              .mul(I80F48.fromNumber(1).sub(feeRate))
-              .toBig();
+            const nativeQuote = new BN(
+              nativeQuoteFromPerpTrade
+                .mul(I80F48.fromNumber(1).sub(feeRate))
+                .toBig()
+                .round(undefined, 0)
+                .toNumber()
+            );
             const feeQuote = sumQuoteLots
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
@@ -840,8 +844,8 @@ export class Router {
               .add(
                 maxBaseWithdrawn.isNeg()
                   ? zero
-                  : I80F48.fromBig(maxBaseWithdrawn).div(
-                      I80F48.fromBig(nativeMaxBase)
+                  : I80F48.fromI64(maxBaseWithdrawn.toTwos(64)).div(
+                      I80F48.fromI64(nativeMaxBase.toTwos(64))
                     )
               )
               .add(
@@ -850,9 +854,13 @@ export class Router {
                   : RAVEN_POSITION_INCREASE_FEE
               );
 
-            const nativeQuote = I80F48.fromBig(amount)
-              .mul(I80F48.fromNumber(1).sub(feeRate))
-              .toBig();
+            const nativeQuote = new BN(
+              I80F48.fromI64(amount.toTwos(64))
+                .mul(I80F48.fromNumber(1).sub(feeRate))
+                .toBig()
+                .round(undefined, 0)
+                .toNumber()
+            );
 
             let amountInLots = nativeQuote.div(market.quoteLotSize);
 
