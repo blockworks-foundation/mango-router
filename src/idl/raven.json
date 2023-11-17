@@ -195,7 +195,7 @@
         },
         {
           "name": "payer",
-          "isMut": false,
+          "isMut": true,
           "isSigner": true
         },
         {
@@ -245,7 +245,7 @@
         },
         {
           "name": "payer",
-          "isMut": false,
+          "isMut": true,
           "isSigner": true
         },
         {
@@ -282,7 +282,7 @@
       ]
     },
     {
-      "name": "tradeJupiter",
+      "name": "tradeExactIn",
       "accounts": [
         {
           "name": "trader",
@@ -404,5 +404,55 @@
         }
       ]
     }
-  ]
+  ],
+  "events": [
+    {
+      "name": "RavenTradeLog",
+      "fields": [
+        {
+          "name": "trader",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "baseBank",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "exactIn",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "initHealth",
+          "type": "i128",
+          "index": false
+        },
+        {
+          "name": "isBaseIn",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "depositAmountAtoms",
+          "type": "i64",
+          "index": false
+        },
+        {
+          "name": "withdrawAmountAtoms",
+          "type": "i64",
+          "index": false
+        },
+        {
+          "name": "perpAmountLots",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "address": "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
+  }
 }
