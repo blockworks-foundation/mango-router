@@ -14,6 +14,6 @@ export const RAVEN_MANGO_ACCOUNT_OWNER: PublicKey = PublicKey.findProgramAddress
 )[0];
 
 export const RAVEN_FEE_BPS = 1;
-export const MANGO_TAKER_FEE_BPS = 2;
+export const MANGO_TAKER_FEE_BPS = 6;
 export const MANGO_BORROW_FEE_BPS = 5;
 export const POSITION_INCREASE_RAVEN_FEE_BPS = 1;
