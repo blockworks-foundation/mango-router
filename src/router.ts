@@ -687,7 +687,7 @@ export class Router {
               sumQuoteLots.mul(market.quoteLotSize).toTwos(64)
             );
             const nativeQuoteWithdrawn = nativeQuoteFromPerpTrade.sub(
-              I80F48.fromNumber(ravenPositions.quoteNative)
+              I80F48.fromNumber(Math.max(0, ravenPositions.quoteNative))
             );
             const zero = ZERO_I80F48();
             const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
@@ -836,7 +836,7 @@ export class Router {
             }
             const nativeMaxBase = sumMaxBase.mul(market.baseLotSize);
             const maxBaseWithdrawn = nativeMaxBase.subn(
-              ravenPositions.baseNative
+              Math.max(0, ravenPositions.baseNative)
             );
 
             const zero = ZERO_I80F48();
