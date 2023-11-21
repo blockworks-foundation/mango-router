@@ -67,6 +67,7 @@ import {
   RAVEN_BASE_FEE,
   RAVEN_POSITION_INCREASE_FEE,
 } from "./constants";
+import { assert } from "console";
 
 export interface DepthResult {
   label: string;
@@ -91,6 +92,11 @@ export interface SwapResult {
   minAmtOut: BN;
   mints: PublicKey[];
   ok: boolean;
+}
+
+function BN2I80(bn: BN) {
+  assert(bn.bitLength() < 63);
+  return I80F48.fromI64(bn.toTwos(64));
 }
 
 function mergeSwapResults(...hops: SwapResult[]) {
@@ -610,18 +616,14 @@ export class Router {
     );
 
     await mangoAccount.reload(client);
-    const ravenPositions = {
-      perpLots: mangoAccount.perpPositionExistsForMarket(market)
-        ? market.uiBaseToLots(
-            mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)
-          )
+    let ravenPositions = {
+      perpBase: mangoAccount.perpPositionExistsForMarket(market)
+        ? mangoAccount
+            .getPerpPosition(market.perpMarketIndex)!
+            .getBasePosition(market)
         : new BN(0),
-      baseNative:
-        mangoAccount.getTokenBalanceUi(baseBank) *
-        Math.pow(10, baseBank.mintDecimals),
-      quoteNative:
-        mangoAccount.getTokenBalanceUi(quoteBank) *
-        Math.pow(10, quoteBank.mintDecimals),
+      tokenBase: mangoAccount.getTokenBalance(baseBank),
+      tokenQuote: mangoAccount.getTokenBalance(quoteBank),
       healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
     };
     this.subscriptions.push(
@@ -633,20 +635,16 @@ export class Router {
               "mangoAccount",
               acc.data
             );
-          ravenPositions.perpLots = mangoAccount.perpPositionExistsForMarket(
-            market
-          )
-            ? market.uiBaseToLots(
-                mangoAccount.getPerpPositionUi(group, market.perpMarketIndex)
-              )
-            : new BN(0);
-          ravenPositions.baseNative =
-            mangoAccount.getTokenBalanceUi(baseBank) *
-            Math.pow(10, baseBank.mintDecimals);
-          ravenPositions.quoteNative =
-            mangoAccount.getTokenBalanceUi(quoteBank) *
-            Math.pow(10, quoteBank.mintDecimals);
-          ravenPositions.healthRatio = mangoAccount.getHealthRatio(group, HealthType.init);
+          ravenPositions = {
+            perpBase: mangoAccount.perpPositionExistsForMarket(market)
+              ? mangoAccount
+                  .getPerpPosition(market.perpMarketIndex)!
+                  .getBasePosition(market)
+              : new BN(0),
+            tokenBase: mangoAccount.getTokenBalance(baseBank),
+            tokenQuote: mangoAccount.getTokenBalance(quoteBank),
+            ravenPositions.healthRatio = mangoAccount.getHealthRatio(group, HealthType.init);
+          };
         },
         "processed"
       )
@@ -686,11 +684,11 @@ export class Router {
             const nativeBase = amountInLots
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
-            const nativeQuoteFromPerpTrade = I80F48.fromI64(
-              sumQuoteLots.mul(market.quoteLotSize).toTwos(64)
+            const nativeQuoteFromPerpTrade = BN2I80(
+              sumQuoteLots.mul(market.quoteLotSize)
             );
             const nativeQuoteWithdrawn = nativeQuoteFromPerpTrade.sub(
-              I80F48.fromNumber(ravenPositions.quoteNative)
+              ravenPositions.tokenQuote.max(ZERO_I80F48())
             );
             const zero = ZERO_I80F48();
             const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
@@ -702,7 +700,7 @@ export class Router {
                   : zero
               )
               .add(
-                ravenPositions.perpLots.isNeg()
+                ravenPositions.perpBase.isNeg()
                   ? RAVEN_POSITION_INCREASE_FEE
                   : zero
               );
@@ -842,8 +840,8 @@ export class Router {
               }
             }
             const nativeMaxBase = sumMaxBase.mul(market.baseLotSize);
-            const maxBaseWithdrawn = nativeMaxBase.subn(
-              ravenPositions.baseNative
+            const maxBaseWithdrawn = BN2I80(nativeMaxBase).sub(
+              ravenPositions.tokenBase.max(ZERO_I80F48())
             );
 
             const zero = ZERO_I80F48();
@@ -851,18 +849,16 @@ export class Router {
               .add(
                 maxBaseWithdrawn.isNeg()
                   ? zero
-                  : I80F48.fromI64(maxBaseWithdrawn.toTwos(64)).div(
-                      I80F48.fromI64(nativeMaxBase.toTwos(64))
-                    )
+                  : maxBaseWithdrawn.div(BN2I80(nativeMaxBase))
               )
               .add(
-                ravenPositions.perpLots.isNeg()
+                ravenPositions.perpBase.isNeg()
                   ? zero
                   : RAVEN_POSITION_INCREASE_FEE
               );
 
             const nativeQuote = new BN(
-              I80F48.fromI64(amount.toTwos(64))
+              BN2I80(amount)
                 .mul(I80F48.fromNumber(1).sub(feeRate))
                 .toBig()
                 .round(undefined, 0)

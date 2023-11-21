@@ -198,7 +198,7 @@ async function main() {
           recentBlockhash: response.blockhash,
           instructions: [
             ...instructions,
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }),
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
           ],
         }).compileToV0Message(group.addressLookupTablesList);
