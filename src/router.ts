@@ -2,6 +2,7 @@ import {
   BookSide,
   BookSideType,
   Group,
+  HealthType,
   I80F48,
   MANGO_V4_ID,
   MANGO_V4_MAIN_GROUP,
@@ -621,6 +622,7 @@ export class Router {
       quoteNative:
         mangoAccount.getTokenBalanceUi(quoteBank) *
         Math.pow(10, quoteBank.mintDecimals),
+      healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
     };
     this.subscriptions.push(
       this.connection.onAccountChange(
@@ -644,6 +646,7 @@ export class Router {
           ravenPositions.quoteNative =
             mangoAccount.getTokenBalanceUi(quoteBank) *
             Math.pow(10, quoteBank.mintDecimals);
+          ravenPositions.healthRatio = mangoAccount.getHealthRatio(group, HealthType.init);
         },
         "processed"
       )
@@ -715,7 +718,11 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            if (nativeQuote.gte(otherAmountThreshold)) {
+            const passesHealthRatioCheck =
+              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              !ravenPositions.perpLots.isNeg();
+
+            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
                 label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
                 marketInfos: [
@@ -886,7 +893,11 @@ export class Router {
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
-            if (nativeBase.gte(otherAmountThreshold)) {
+            const passesHealthRatioCheck =
+              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.perpLots.isNeg();
+
+            if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
                 label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
