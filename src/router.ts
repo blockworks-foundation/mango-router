@@ -2,6 +2,7 @@ import {
   BookSide,
   BookSideType,
   Group,
+  HealthType,
   I80F48,
   MANGO_V4_ID,
   MANGO_V4_MAIN_GROUP,
@@ -623,6 +624,7 @@ export class Router {
         : new BN(0),
       tokenBase: mangoAccount.getTokenBalance(baseBank),
       tokenQuote: mangoAccount.getTokenBalance(quoteBank),
+      healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
     };
     this.subscriptions.push(
       this.connection.onAccountChange(
@@ -641,6 +643,7 @@ export class Router {
               : new BN(0),
             tokenBase: mangoAccount.getTokenBalance(baseBank),
             tokenQuote: mangoAccount.getTokenBalance(quoteBank),
+            healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
           };
         },
         "processed"
@@ -713,7 +716,13 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            if (nativeQuote.gte(otherAmountThreshold)) {
+            // TOOD: Add the OI limit check also
+            // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
+            const passesHealthRatioCheck =
+              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              !ravenPositions.perpBase.isNeg();
+
+            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
                 label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
                 marketInfos: [
@@ -882,7 +891,11 @@ export class Router {
               .mul(market.baseLotSize)
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
-            if (nativeBase.gte(otherAmountThreshold)) {
+            const passesHealthRatioCheck =
+              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.perpBase.isNeg();
+
+            if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
                 label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
