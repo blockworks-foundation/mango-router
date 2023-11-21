@@ -643,7 +643,7 @@ export class Router {
               : new BN(0),
             tokenBase: mangoAccount.getTokenBalance(baseBank),
             tokenQuote: mangoAccount.getTokenBalance(quoteBank),
-            ravenPositions.healthRatio = mangoAccount.getHealthRatio(group, HealthType.init);
+            healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
           };
         },
         "processed"
@@ -716,9 +716,11 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
+            // TOOD: Add the OI limit check also
+            // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
             const passesHealthRatioCheck =
               ravenPositions.healthRatio > I80F48.fromNumber(100) ||
-              !ravenPositions.perpLots.isNeg();
+              !ravenPositions.perpBase.isNeg();
 
             if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
@@ -891,7 +893,7 @@ export class Router {
 
             const passesHealthRatioCheck =
               ravenPositions.healthRatio > I80F48.fromNumber(100) ||
-              ravenPositions.perpLots.isNeg();
+              ravenPositions.perpBase.isNeg();
 
             if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
               return {
