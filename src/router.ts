@@ -719,7 +719,7 @@ export class Router {
             // TOOD: Add the OI limit check also
             // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
             const passesHealthRatioCheck =
-              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.healthRatio.toNumber() > 100 ||
               !ravenPositions.perpBase.isNeg();
 
             if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
@@ -892,7 +892,7 @@ export class Router {
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
             const passesHealthRatioCheck =
-              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.healthRatio.toNumber() > 100 ||
               ravenPositions.perpBase.isNeg();
 
             if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
