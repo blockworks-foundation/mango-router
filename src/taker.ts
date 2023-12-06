@@ -213,8 +213,8 @@ async function main() {
           'Sending trade',
           'SwapMode:', mode,
           'label:', best.label,
-          'maxIn:', best.maxAmtIn.toNumber(),
-          'minOut:', best.minAmtOut.toNumber(),
+          'maxIn:', best.maxAmtIn.toString(),
+          'minOut:', best.minAmtOut.toString(),
           'intermediateAmounts', best.intermediateAmounts.map((val: BN) => { return val.toString(); }),
           'sig', sig
         );
