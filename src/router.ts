@@ -92,6 +92,9 @@ export interface SwapResult {
   minAmtOut: BN;
   mints: PublicKey[];
   ok: boolean;
+
+  // The maxAmtIn and minAmtOut that are merged away.
+  intermediateAmounts: BN[];
 }
 
 function BN2I80(bn: BN) {
@@ -111,6 +114,7 @@ function mergeSwapResults(...hops: SwapResult[]) {
     minAmtOut: lastHop.minAmtOut,
     mints: [...firstHop.mints, ...lastHop.mints],
     ok: hops.reduce((p, c) => p && c.ok, true),
+    intermediateAmounts: [...firstHop.intermediateAmounts, firstHop.minAmtOut, lastHop.maxAmtIn, ...lastHop.intermediateAmounts],
   };
 }
 
@@ -231,6 +235,7 @@ class WhirlpoolEdge implements Edge {
         maxAmtIn: quote.estimatedAmountIn,
         minAmtOut: quote.estimatedAmountOut,
         mints: [this.inputMint, this.outputMint],
+        intermediateAmounts: [],
       };
     } catch (e) {
       // console.error(
@@ -249,6 +254,7 @@ class WhirlpoolEdge implements Edge {
         minAmtOut: otherAmountThreshold,
         mints: [this.inputMint, this.outputMint],
         instructions: async () => [],
+        intermediateAmounts: [],
       };
     }
   }
@@ -267,7 +273,7 @@ class RaydiumEdge implements Edge {
     poolInfo: ClmmPoolInfo,
     raydiumCache: RaydiumCache
   ): Edge[] {
-    const label = "orca: " + poolInfo.id.toString();
+    const label = "raydium: " + poolInfo.id.toString();
     const fwd = new RaydiumEdge(
       label,
       new PublicKey(poolInfo.mintA.mint),
@@ -365,7 +371,7 @@ class RaydiumEdge implements Edge {
       return {
         ok: ok,
         instructions,
-        label: this.poolPk.toString(),
+        label: 'raydium:' + this.poolPk.toString(),
         marketInfos: [
           {
             label: "Raydium",
@@ -379,6 +385,7 @@ class RaydiumEdge implements Edge {
         maxAmtIn: maxAmtIn,
         minAmtOut: minAmtOut,
         mints: [this.inputMint, this.outputMint],
+        intermediateAmounts: [],
       };
     } catch (err) {
       // console.error(
@@ -397,6 +404,7 @@ class RaydiumEdge implements Edge {
         minAmtOut: otherAmountThreshold,
         mints: [this.inputMint, this.outputMint],
         instructions: async () => [],
+        intermediateAmounts: [],
       };
     }
   }
@@ -716,7 +724,7 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            // TOOD: Add the OI limit check also
+            // TODO: Add the OI limit check also
             // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
             const passesHealthRatioCheck =
               ravenPositions.healthRatio > I80F48.fromNumber(100) ||
@@ -791,6 +799,7 @@ export class Router {
 
                   return [tradeIx];
                 },
+                intermediateAmounts: [],
               };
             }
           } else {
@@ -808,6 +817,7 @@ export class Router {
             minAmtOut: otherAmountThreshold,
             mints: [],
             instructions: async () => [],
+            intermediateAmounts: [],
           };
         },
       },
@@ -963,6 +973,7 @@ export class Router {
 
                   return [tradeIx];
                 },
+                intermediateAmounts: [],
               };
             }
           } else {
@@ -980,6 +991,7 @@ export class Router {
             minAmtOut: otherAmountThreshold,
             mints: [],
             instructions: async () => [],
+            intermediateAmounts: [],
           };
         },
       },
