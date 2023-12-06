@@ -215,7 +215,7 @@ async function main() {
           'label:', best.label,
           'maxIn:', best.maxAmtIn.toNumber(),
           'minOut:', best.minAmtOut.toNumber(),
-          'intermediateAmounts', best.intermediateAmounts.map((val: BN) => { return val.toNumber(); }),
+          'intermediateAmounts', best.intermediateAmounts.map((val: BN) => { return val.toString(); }),
           'sig', sig
         );
 
