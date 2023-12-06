@@ -403,6 +403,125 @@
           "type": "i64"
         }
       ]
+    },
+    {
+      "name": "initCheckpoint",
+      "accounts": [
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "checkpoint",
+          "isMut": true,
+          "isSigner": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "type": "string",
+                "value": "checkpoint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "resetCheckpoint",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "checkpoint",
+          "isMut": true,
+          "isSigner": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "type": "string",
+                "value": "checkpoint"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "updateCheckpoint",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "checkpoint",
+          "isMut": true,
+          "isSigner": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "type": "string",
+                "value": "checkpoint"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Checkpoint",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amountByMint",
+            "type": {
+              "array": [
+                {
+                  "option": {
+                    "defined": "Balance"
+                  }
+                },
+                100
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Balance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "publicKey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
     }
   ],
   "events": [
@@ -451,8 +570,5 @@
         }
       ]
     }
-  ],
-  "metadata": {
-    "address": "AXRsZddcKo8BcHrbbBdXyHozSaRGqHc11ePh9ChKuoa1"
-  }
+  ]
 }
