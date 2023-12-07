@@ -291,10 +291,9 @@ class RaydiumEdge implements Edge {
     return [fwd, bwd];
   }
   
-  // The otherAmountThreshold actually used on the ix and included in the
-  // SwapResult is from the expected swap factoring in the slippage. The
-  // threshold used here in the input is just for checking whether the
-  // SwapResult is ok.
+  // The otherAmountThreshold is just for checking whether the SwapResult is ok.
+  // It is not included as the threshold in the ix or SwapResult, that is based
+  // on slippage.
   async swap(
     amount: BN,
     otherAmountThreshold: BN,
