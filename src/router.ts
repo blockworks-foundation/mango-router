@@ -290,7 +290,11 @@ class RaydiumEdge implements Edge {
     );
     return [fwd, bwd];
   }
-
+  
+  // The otherAmountThreshold actually used on the ix and included in the
+  // SwapResult is from the expected swap factoring in the slippage. The
+  // threshold used here in the input is just for checking whether the
+  // SwapResult is ok.
   async swap(
     amount: BN,
     otherAmountThreshold: BN,
@@ -322,7 +326,7 @@ class RaydiumEdge implements Edge {
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
-        minAmtOut = amountOut.minAmountOut.amount;
+        minAmtOut = new BN(amountOut.minAmountOut.amount.toNumber() * (1 - slippage));
         remainingAccounts = amountOut.remainingAccounts;
       } else {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = Clmm.computeAmountIn({
@@ -337,7 +341,7 @@ class RaydiumEdge implements Edge {
         });
         ok = otherAmountThreshold.gte(amountIn.amountIn.amount);
         fee = amountIn.fee;
-        maxAmtIn = amountIn.maxAmountIn.amount;
+        maxAmtIn = new BN(amountIn.maxAmountIn.amount.toNumber() * (1 + slippage));
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
         remainingAccounts = amountIn.remainingAccounts;
@@ -364,7 +368,7 @@ class RaydiumEdge implements Edge {
                 },
                 inputMint: this.inputMint,
                 amountIn: amount,
-                amountOutMin: otherAmountThreshold,
+                amountOutMin: minAmtOut,
                 sqrtPriceLimitX64: new BN(0),
                 remainingAccounts,
               })
@@ -378,7 +382,7 @@ class RaydiumEdge implements Edge {
                 },
                 outputMint: this.outputMint,
                 amountOut: amount,
-                amountInMax: otherAmountThreshold,
+                amountInMax: maxAmtIn,
                 sqrtPriceLimitX64: new BN(0),
                 remainingAccounts,
               });
@@ -399,8 +403,8 @@ class RaydiumEdge implements Edge {
             },
           },
         ],
-        maxAmtIn: maxAmtIn,
-        minAmtOut: minAmtOut,
+        maxAmtIn: mode == SwapMode.ExactIn ? amount : maxAmtIn,
+        minAmtOut: mode == SwapMode.ExactIn ? minAmtOut : amount,
         mints: [this.inputMint, this.outputMint],
         intermediateAmounts: [],
       };
