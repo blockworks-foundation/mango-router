@@ -352,19 +352,36 @@ class RaydiumEdge implements Edge {
           poolInfo.mintB.mint,
           wallet
         );
-        const swapIx = Clmm.makeSwapBaseInInstructions({
-          poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
-          ownerInfo: {
-            wallet,
-            tokenAccountA,
-            tokenAccountB,
-          },
-          inputMint: this.inputMint,
-          amountIn: amount,
-          amountOutMin: otherAmountThreshold,
-          sqrtPriceLimitX64: new BN(0),
-          remainingAccounts,
-        });
+        const swapIx =
+          mode === SwapMode.ExactIn
+            ? Clmm.makeSwapBaseInInstructions({
+                poolInfo:
+                  this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+                ownerInfo: {
+                  wallet,
+                  tokenAccountA,
+                  tokenAccountB,
+                },
+                inputMint: this.inputMint,
+                amountIn: amount,
+                amountOutMin: otherAmountThreshold,
+                sqrtPriceLimitX64: new BN(0),
+                remainingAccounts,
+              })
+            : Clmm.makeSwapBaseOutInstructions({
+                poolInfo:
+                  this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+                ownerInfo: {
+                  wallet,
+                  tokenAccountA,
+                  tokenAccountB,
+                },
+                outputMint: this.outputMint,
+                amountOut: amount,
+                amountInMax: otherAmountThreshold,
+                sqrtPriceLimitX64: new BN(0),
+                remainingAccounts,
+              });
         return swapIx.innerTransaction.instructions;
       };
 
