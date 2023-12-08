@@ -168,7 +168,6 @@ async function main() {
         );
       }
 
-      const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
       const [best]: SwapResult[] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
       const instructions = await best.instructions(wallet.publicKey);
       let priceImpact: number | undefined = undefined;
