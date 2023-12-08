@@ -190,6 +190,7 @@ async function main() {
       if (profitable) {
         const latestBlockhash: Readonly<{ blockhash: string; lastValidBlockHeight: number; }> = await connection.getLatestBlockhash("finalized");
 
+        /*
         // Use the arb protection function on raven.
         const program = new Program(
           ravenIdl as Idl,
@@ -217,6 +218,7 @@ async function main() {
           } as AccountMeta,
         ])
         .instruction();
+        */
 
         const messageV0 = new TransactionMessage({
           payerKey: keyPair.publicKey,
@@ -225,7 +227,7 @@ async function main() {
             ...instructions,
             ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
-            checkpointIx,
+            //checkpointIx,
           ],
         }).compileToV0Message(group.addressLookupTablesList);
 
@@ -250,6 +252,7 @@ async function main() {
           );
           await sleep(60_000);
         } else {
+          // TODO: Convert confirmationResult into a string
           alertDiscord(
             `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
           );

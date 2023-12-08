@@ -621,7 +621,7 @@ export class Router {
         ? mangoAccount
             .getPerpPosition(market.perpMarketIndex)!
             .getBasePosition(market)
-        : new BN(0),
+        : I80F48.fromNumber(0),
       tokenBase: mangoAccount.getTokenBalance(baseBank),
       tokenQuote: mangoAccount.getTokenBalance(quoteBank),
       healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
@@ -629,18 +629,15 @@ export class Router {
     this.subscriptions.push(
       this.connection.onAccountChange(
         RAVEN_MANGO_ACCOUNT,
-        (acc) => {
-          const mangoAccount =
-            client.program.account.mangoAccount.coder.accounts.decode(
-              "mangoAccount",
-              acc.data
-            );
+        async (acc) => {
+          const mangoAccount: MangoAccount = client.getMangoAccountFromAi(RAVEN_MANGO_ACCOUNT, acc);
+          await mangoAccount.reloadSerum3OpenOrders(client);
           ravenPositions = {
             perpBase: mangoAccount.perpPositionExistsForMarket(market)
               ? mangoAccount
                   .getPerpPosition(market.perpMarketIndex)!
                   .getBasePosition(market)
-              : new BN(0),
+              : I80F48.fromNumber(0),
             tokenBase: mangoAccount.getTokenBalance(baseBank),
             tokenQuote: mangoAccount.getTokenBalance(quoteBank),
             healthRatio: mangoAccount.getHealthRatio(group, HealthType.init),
