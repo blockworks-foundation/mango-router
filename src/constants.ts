@@ -13,3 +13,5 @@ export const RAVEN_MANGO_ACCOUNT_OWNER: PublicKey = PublicKey.findProgramAddress
 
 export const RAVEN_BASE_FEE = I80F48.fromNumber(0.0001);
 export const RAVEN_POSITION_INCREASE_FEE = I80F48.fromNumber(0.0001);
+
+export const CU_LIMIT: number = 700_000;

@@ -1,8 +1,9 @@
 import {
   MangoClient,
   MANGO_V4_ID,
-  toNative,
-  toUiDecimals,
+  MANGO_V4_MAIN_GROUP,
+  getAssociatedTokenAddress,
+  USDC_MINT,
 } from "@blockworks-foundation/mango-v4";
 import { U64_MAX, ZERO } from "@orca-so/common-sdk";
 import {
@@ -10,6 +11,10 @@ import {
   Wallet,
   BN,
   BorshAccountsCoder,
+  Program,
+  Idl,
+  web3,
+  utils,
 } from "@coral-xyz/anchor";
 import {
   Connection,
@@ -17,12 +22,14 @@ import {
   clusterApiUrl,
   PublicKey,
   Keypair,
-  Transaction,
   VersionedTransaction,
   TransactionMessage,
   ComputeBudgetInstruction,
   ComputeBudgetProgram,
+  AccountMeta,
+  TransactionInstruction,
 } from "@solana/web3.js";
+import ravenIdl from "./idl/raven.json";
 
 import { DepthResult, Router, SwapMode, SwapResult } from "./router";
 
@@ -40,7 +47,7 @@ const {
 } = process.env;
 
 import axios from "axios";
-import { json } from "stream/consumers";
+import { CU_LIMIT, RAVEN_PROGRAM_ADDRESS } from "./constants";
 
 export function alertDiscord(message: string) {
   if (DISCORD_WEBHOOK_URL) {
@@ -60,12 +67,9 @@ export function alertDiscord(message: string) {
 }
 
 const cluster = (CLUSTER || "mainnet-beta") as Cluster;
-const groupPk = new PublicKey(
-  GROUP || "78b8f4cGCwmZ9ysPFMWLaLTkkaYnUjwMJYStWe5RTSSX"
-);
+const groupPk = new PublicKey(GROUP || MANGO_V4_MAIN_GROUP);
 const maxRoutes = parseInt(MAX_ROUTES || "2");
 const minTvl = parseInt(MIN_TVL || "500");
-const port = parseInt(PORT || "5000");
 const rpcUrl = RPC_URL || clusterApiUrl(cluster);
 const keyPair = Keypair.fromSecretKey(new Uint8Array(JSON.parse(KEYPAIR!)));
 const wallet = new Wallet(keyPair);
@@ -76,7 +80,7 @@ async function main() {
   const anchorProvider = new AnchorProvider(connection, wallet, {});
 
   // init mango
-  const mangoClient = await MangoClient.connect(
+  const mangoClient = MangoClient.connect(
     anchorProvider as any,
     cluster,
     MANGO_V4_ID[cluster],
@@ -123,8 +127,6 @@ async function main() {
       const outputMintPk = new PublicKey(outputMint);
       const mode = SwapMode.ExactIn;
       const slippage = 0.00001;
-      // const amount = new BN(10000);
-      // const amount = new BN(1000000 * 20);
       let referencePrice: number | undefined;
       let amount: BN | undefined;
       if (
@@ -166,11 +168,7 @@ async function main() {
         );
       }
 
-      // console.log(
-      //   "ranked",
-      //   ranked.map((r) => [r.label, r.minAmtOut.toString()])
-      // );
-
+      const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
       const [best]: SwapResult[] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
       const instructions = await best.instructions(wallet.publicKey);
       let priceImpact: number | undefined = undefined;
@@ -191,15 +189,46 @@ async function main() {
       );
 
       if (profitable) {
-        const response = await connection.getLatestBlockhash("finalized");
+        const latestBlockhash: Readonly<{ blockhash: string; lastValidBlockHeight: number; }> = await connection.getLatestBlockhash("finalized");
+
+        /*
+        // Use the arb protection function on raven.
+        const program = new Program(
+          ravenIdl as Idl,
+          RAVEN_PROGRAM_ADDRESS,
+          anchorProvider
+        );
+        const [checkpoint, _unusedBump] =  web3.PublicKey.findProgramAddressSync(
+          [Buffer.from(utils.bytes.utf8.encode('checkpoint'))],
+          program.programId,
+        );
+        const checkpointIx: TransactionInstruction = await program.methods.updateCheckpoint().accounts({
+          payer: keyPair.publicKey,
+          checkpoint: checkpoint,
+        })
+        .remainingAccounts([
+          {
+            pubkey: await getAssociatedTokenAddress(inputMintPk, keyPair.publicKey),
+            isWritable: true,
+            isSigner: false,
+          } as AccountMeta,
+          {
+            pubkey: await getAssociatedTokenAddress(USDC_MINT, keyPair.publicKey),
+            isWritable: true,
+            isSigner: false,
+          } as AccountMeta,
+        ])
+        .instruction();
+        */
 
         const messageV0 = new TransactionMessage({
           payerKey: keyPair.publicKey,
-          recentBlockhash: response.blockhash,
+          recentBlockhash: latestBlockhash.blockhash,
           instructions: [
             ...instructions,
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
+            //checkpointIx,
           ],
         }).compileToV0Message(group.addressLookupTablesList);
 
@@ -221,8 +250,8 @@ async function main() {
 
         alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
         const confirmationResult = await connection.confirmTransaction({
-          blockhash: response.blockhash,
-          lastValidBlockHeight: response.lastValidBlockHeight,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
           signature: sig,
         });
         if (confirmationResult.value.err) {
@@ -231,8 +260,9 @@ async function main() {
               confirmationResult.value.err
             )}`
           );
-          await sleep(60000);
+          await sleep(60_000);
         } else {
+          // TODO: Convert confirmationResult into a string
           alertDiscord(
             `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
           );
