@@ -145,7 +145,7 @@ async function main() {
 
       const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
 
-      const results = await router.swap(
+      const results: SwapResult[] = await router.swap(
         inputMintPk,
         outputMintPk,
         amount!,
@@ -169,6 +169,7 @@ async function main() {
       }
 
       const [best] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
+      const [best]: SwapResult[] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
       const instructions = await best.instructions(wallet.publicKey);
       let priceImpact: number | undefined = undefined;
       if (!!referencePrice) {
@@ -237,6 +238,15 @@ async function main() {
         const sig = await connection.sendTransaction(transaction, {
           skipPreflight: true,
         });
+        console.log(
+          'Sending trade',
+          'SwapMode:', mode,
+          'label:', best.label,
+          'maxIn:', best.maxAmtIn.toString(),
+          'minOut:', best.minAmtOut.toString(),
+          'intermediateAmounts', best.intermediateAmounts.map((val: BN) => { return val.toString(); }),
+          'sig', sig
+        );
 
         alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
         const confirmationResult = await connection.confirmTransaction({

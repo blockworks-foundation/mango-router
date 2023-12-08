@@ -92,6 +92,9 @@ export interface SwapResult {
   minAmtOut: BN;
   mints: PublicKey[];
   ok: boolean;
+
+  // The maxAmtIn and minAmtOut that are merged away.
+  intermediateAmounts: BN[];
 }
 
 function BN2I80(bn: BN) {
@@ -111,6 +114,7 @@ function mergeSwapResults(...hops: SwapResult[]) {
     minAmtOut: lastHop.minAmtOut,
     mints: [...firstHop.mints, ...lastHop.mints],
     ok: hops.reduce((p, c) => p && c.ok, true),
+    intermediateAmounts: [...firstHop.intermediateAmounts, firstHop.minAmtOut, lastHop.maxAmtIn, ...lastHop.intermediateAmounts],
   };
 }
 
@@ -231,6 +235,7 @@ class WhirlpoolEdge implements Edge {
         maxAmtIn: quote.estimatedAmountIn,
         minAmtOut: quote.estimatedAmountOut,
         mints: [this.inputMint, this.outputMint],
+        intermediateAmounts: [],
       };
     } catch (e) {
       // console.error(
@@ -249,6 +254,7 @@ class WhirlpoolEdge implements Edge {
         minAmtOut: otherAmountThreshold,
         mints: [this.inputMint, this.outputMint],
         instructions: async () => [],
+        intermediateAmounts: [],
       };
     }
   }
@@ -267,7 +273,7 @@ class RaydiumEdge implements Edge {
     poolInfo: ClmmPoolInfo,
     raydiumCache: RaydiumCache
   ): Edge[] {
-    const label = "orca: " + poolInfo.id.toString();
+    const label = "raydium: " + poolInfo.id.toString();
     const fwd = new RaydiumEdge(
       label,
       new PublicKey(poolInfo.mintA.mint),
@@ -284,7 +290,10 @@ class RaydiumEdge implements Edge {
     );
     return [fwd, bwd];
   }
-
+  
+  // The otherAmountThreshold is just for checking whether the SwapResult is ok.
+  // It is not included as the threshold in the ix or SwapResult, that is based
+  // on slippage.
   async swap(
     amount: BN,
     otherAmountThreshold: BN,
@@ -316,7 +325,7 @@ class RaydiumEdge implements Edge {
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
-        minAmtOut = amountOut.minAmountOut.amount;
+        minAmtOut = new BN(amountOut.minAmountOut.amount.toNumber() * (1 - slippage));
         remainingAccounts = amountOut.remainingAccounts;
       } else {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = Clmm.computeAmountIn({
@@ -331,7 +340,7 @@ class RaydiumEdge implements Edge {
         });
         ok = otherAmountThreshold.gte(amountIn.amountIn.amount);
         fee = amountIn.fee;
-        maxAmtIn = amountIn.maxAmountIn.amount;
+        maxAmtIn = new BN(amountIn.maxAmountIn.amount.toNumber() * (1 + slippage));
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
         remainingAccounts = amountIn.remainingAccounts;
@@ -346,26 +355,43 @@ class RaydiumEdge implements Edge {
           poolInfo.mintB.mint,
           wallet
         );
-        const swapIx = Clmm.makeSwapBaseInInstructions({
-          poolInfo: this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
-          ownerInfo: {
-            wallet,
-            tokenAccountA,
-            tokenAccountB,
-          },
-          inputMint: this.inputMint,
-          amountIn: amount,
-          amountOutMin: otherAmountThreshold,
-          sqrtPriceLimitX64: new BN(0),
-          remainingAccounts,
-        });
+        const swapIx =
+          mode === SwapMode.ExactIn
+            ? Clmm.makeSwapBaseInInstructions({
+                poolInfo:
+                  this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+                ownerInfo: {
+                  wallet,
+                  tokenAccountA,
+                  tokenAccountB,
+                },
+                inputMint: this.inputMint,
+                amountIn: amount,
+                amountOutMin: minAmtOut,
+                sqrtPriceLimitX64: new BN(0),
+                remainingAccounts,
+              })
+            : Clmm.makeSwapBaseOutInstructions({
+                poolInfo:
+                  this.raydiumCache.poolInfos[this.poolPk.toBase58()].state,
+                ownerInfo: {
+                  wallet,
+                  tokenAccountA,
+                  tokenAccountB,
+                },
+                outputMint: this.outputMint,
+                amountOut: amount,
+                amountInMax: maxAmtIn,
+                sqrtPriceLimitX64: new BN(0),
+                remainingAccounts,
+              });
         return swapIx.innerTransaction.instructions;
       };
 
       return {
         ok: ok,
         instructions,
-        label: this.poolPk.toString(),
+        label: 'raydium:' + this.poolPk.toString(),
         marketInfos: [
           {
             label: "Raydium",
@@ -376,9 +402,10 @@ class RaydiumEdge implements Edge {
             },
           },
         ],
-        maxAmtIn: maxAmtIn,
-        minAmtOut: minAmtOut,
+        maxAmtIn: mode == SwapMode.ExactIn ? amount : maxAmtIn,
+        minAmtOut: mode == SwapMode.ExactIn ? minAmtOut : amount,
         mints: [this.inputMint, this.outputMint],
+        intermediateAmounts: [],
       };
     } catch (err) {
       // console.error(
@@ -397,6 +424,7 @@ class RaydiumEdge implements Edge {
         minAmtOut: otherAmountThreshold,
         mints: [this.inputMint, this.outputMint],
         instructions: async () => [],
+        intermediateAmounts: [],
       };
     }
   }
@@ -713,10 +741,10 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            // TOOD: Add the OI limit check also
+            // TODO: Add the OI limit check also
             // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
             const passesHealthRatioCheck =
-              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.healthRatio.toNumber() > 100 ||
               !ravenPositions.perpBase.isNeg();
 
             if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
@@ -788,6 +816,7 @@ export class Router {
 
                   return [tradeIx];
                 },
+                intermediateAmounts: [],
               };
             }
           } else {
@@ -805,6 +834,7 @@ export class Router {
             minAmtOut: otherAmountThreshold,
             mints: [],
             instructions: async () => [],
+            intermediateAmounts: [],
           };
         },
       },
@@ -889,7 +919,7 @@ export class Router {
               .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
 
             const passesHealthRatioCheck =
-              ravenPositions.healthRatio > I80F48.fromNumber(100) ||
+              ravenPositions.healthRatio.toNumber() > 100 ||
               ravenPositions.perpBase.isNeg();
 
             if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
@@ -960,6 +990,7 @@ export class Router {
 
                   return [tradeIx];
                 },
+                intermediateAmounts: [],
               };
             }
           } else {
@@ -977,6 +1008,7 @@ export class Router {
             minAmtOut: otherAmountThreshold,
             mints: [],
             instructions: async () => [],
+            intermediateAmounts: [],
           };
         },
       },
