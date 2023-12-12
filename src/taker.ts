@@ -155,7 +155,11 @@ async function main() {
       );
 
       const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
-      if (filtered.length == 0) continue;
+      if (filtered.length == 0) {
+        console.log(new Date(), 'No raven routes found');
+        await sleep(100);
+        continue;
+      }
 
       let ranked: SwapResult[] = [];
       if (mode === SwapMode.ExactIn) {
