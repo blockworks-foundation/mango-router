@@ -687,6 +687,19 @@ export class Router {
           mode: SwapMode,
           slippage: number
         ): Promise<SwapResult> => {
+          if (amount.toNumber() == 0) {
+            return {
+              ok: false,
+              label: "",
+              marketInfos: [],
+              maxAmtIn: amount,
+              minAmtOut: otherAmountThreshold,
+              mints: [],
+              instructions: async () => [],
+              intermediateAmounts: [],
+            };
+          }
+
           if (mode === SwapMode.ExactIn) {
             let amountInLots = amount
               .divn(Math.pow(10, baseBank.mintDecimals - market.baseDecimals))
@@ -848,13 +861,26 @@ export class Router {
           mode: SwapMode,
           slippage: number
         ): Promise<SwapResult> => {
+          if (amount.toNumber() == 0) {
+            return {
+              ok: false,
+              label: "",
+              marketInfos: [],
+              maxAmtIn: amount,
+              minAmtOut: otherAmountThreshold,
+              mints: [],
+              instructions: async () => [],
+              intermediateAmounts: [],
+            };
+          }
+
           if (mode === SwapMode.ExactIn) {
             // Calculate upper bound estimation of the traded size
             const sumMaxBase = new BN(0);
             {
               const amountInLots = amount.div(market.quoteLotSize);
               const sumQuote = new BN(0);
-              for (const order of booksides[1].items()) {
+              for (const order of booksides[1].itemsValid()) {
                 sumMaxBase.iadd(order.sizeLots);
                 sumQuote.iadd(order.sizeLots.mul(order.priceLots));
 
