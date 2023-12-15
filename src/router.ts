@@ -168,7 +168,7 @@ class WhirlpoolEdge implements Edge {
       const fetcher = this.client.getFetcher();
       const pool = await this.client.getPool(this.poolPk);
       const programId = this.client.getContext().program.programId;
-      const slippageLimit = Percentage.fromFraction(slippage * 1e8, 1e8);
+      const slippageLimit = Percentage.fromFraction(Math.round(slippage * 1e8), 1e8);
       let quote: SwapQuote | undefined;
       let ok: boolean = false;
 
