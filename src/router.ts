@@ -909,16 +909,17 @@ export class Router {
               }
             }
             const nativeMaxBase = sumMaxBase.mul(market.baseLotSize);
-            const maxBaseWithdrawn = BN2I80(nativeMaxBase).sub(
+            const maxBaseBorrowed = BN2I80(nativeMaxBase).sub(
               ravenPositions.tokenBase.max(ZERO_I80F48())
             );
 
             const zero = ZERO_I80F48();
             const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
               .add(
-                maxBaseWithdrawn.isNeg()
+                maxBaseBorrowed.isNeg()
                   ? zero
-                  : maxBaseWithdrawn.div(BN2I80(nativeMaxBase))
+                  : maxBaseBorrowed.div(BN2I80(nativeMaxBase))
+                                   .mul(baseBank.loanOriginationFeeRate)
               )
               .add(
                 ravenPositions.perpBase.isNeg()
