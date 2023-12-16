@@ -8,6 +8,7 @@ import {
   MANGO_V4_MAIN_GROUP,
   MangoAccount,
   MangoClient,
+  PerpMarket,
   USDC_MINT,
   ZERO_I80F48,
   getAssociatedTokenAddress,
@@ -674,6 +675,19 @@ export class Router {
         "processed"
       )
     );
+    let marketOi = market.openInterest;
+    this.subscriptions.push(
+      this.connection.onAccountChange(
+        market.publicKey,
+        async (_acc) => {
+          // We could parse the account, but it is easier to just reload the
+          // group and read it off the market.
+          await group.reloadAll(client);
+          marketOi = market.openInterest;
+        },
+        "processed"
+      )
+    );
 
     // create edges
     const edges = [
@@ -754,13 +768,13 @@ export class Router {
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            // TODO: Add the OI limit check also
-            // https://github.com/mschneider/raven/blob/main/programs/raven/src/instructions/trade_exact_in.rs#L415
+            const passesOiCheck = Math.abs(ravenPositions.perpBase.toNumber()) < marketOi.toNumber() / 20 ||
+              !ravenPositions.perpBase.isNeg();
             const passesHealthRatioCheck =
               ravenPositions.healthRatio.toNumber() > 100 ||
               !ravenPositions.perpBase.isNeg();
 
-            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck) {
+            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck && passesOiCheck) {
               return {
                 label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
                 marketInfos: [
@@ -947,8 +961,10 @@ export class Router {
             const passesHealthRatioCheck =
               ravenPositions.healthRatio.toNumber() > 100 ||
               ravenPositions.perpBase.isNeg();
+            const passesOiCheck = Math.abs(ravenPositions.perpBase.toNumber()) < marketOi.toNumber() / 20 ||
+              ravenPositions.perpBase.isNeg();
 
-            if (nativeBase.gte(otherAmountThreshold) && passesHealthRatioCheck) {
+            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck && passesOiCheck) {
               return {
                 label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
