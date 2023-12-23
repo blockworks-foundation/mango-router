@@ -118,6 +118,12 @@ async function main() {
   // init router
   const router = new Router(anchorProvider, minTvl);
   await router.start();
+  let latestBlockhash: Readonly<{ blockhash: string; lastValidBlockHeight: number; }> = await connection.getLatestBlockhash("finalized");
+
+  // Regularly update the latest blockhash in the background.
+  setInterval(async function(){
+    latestBlockhash = await connection.getLatestBlockhash("finalized");
+  }, 10_000);
 
   while (true) {
     try {
@@ -192,8 +198,6 @@ async function main() {
       );
 
       if (profitable) {
-        const latestBlockhash: Readonly<{ blockhash: string; lastValidBlockHeight: number; }> = await connection.getLatestBlockhash("finalized");
-
         /*
         // Use the arb protection function on raven.
         const program = new Program(
