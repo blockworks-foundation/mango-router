@@ -1105,6 +1105,18 @@ export class Router {
       client,
       group,
       mangoAccount!,
+      "BTC-PERP",
+      "wbtc",
+      "usdc",
+      new PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"),
+      USDC_MINT
+    );
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
       "SOL-PERP",
       "wsol",
       "usdc",
