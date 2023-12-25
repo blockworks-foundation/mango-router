@@ -156,35 +156,47 @@ async function main() {
           inputBank.uiPrice;
         amount = new BN(parseFloat(SIZE!) * 10 ** inputBank.mintDecimals);
       }
+      const results: SwapResult[][] = await Promise.all([
+        router.swap(
+          inputMintPk,
+          outputMintPk,
+          amount!.muln(64),
+          ZERO,
+          mode,
+          slippage
+        ),
+        router.swap(
+          inputMintPk,
+          outputMintPk,
+          amount!.muln(16),
+          ZERO,
+          mode,
+          slippage
+        ),
+        router.swap(
+          inputMintPk,
+          outputMintPk,
+          amount!.muln(4),
+          ZERO,
+          mode,
+          slippage
+        ),
+        router.swap(inputMintPk, outputMintPk, amount!, ZERO, mode, slippage),
+      ]);
 
-      const otherAmountThreshold = mode == SwapMode.ExactIn ? ZERO : U64_MAX;
+      const profit = (r: SwapResult) => r.minAmtOut.sub(r.maxAmtIn);
+      const filtered = results
+        .flat()
+        .filter((r) => r.ok && r.label.includes("rvn") && profit(r).gte(ZERO));
 
-      const results: SwapResult[] = await router.swap(
-        inputMintPk,
-        outputMintPk,
-        amount!,
-        otherAmountThreshold,
-        mode,
-        slippage
-      );
-
-      const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
       if (filtered.length == 0) {
         console.log(new Date(), "No raven routes found");
         await sleep(100);
         continue;
       }
 
-      let ranked: SwapResult[] = [];
-      if (mode === SwapMode.ExactIn) {
-        ranked = filtered.sort((a, b) =>
-          Number(b.minAmtOut.sub(a.minAmtOut).toString())
-        );
-      } else if (mode === SwapMode.ExactOut) {
-        ranked = filtered.sort((a, b) =>
-          Number(a.maxAmtIn.sub(b.maxAmtIn).toString())
-        );
-      }
+      let ranked = filtered.sort((a, b) =>
+        Number(profit(b).sub(profit(a)).toString()) );
 
       const [best]: SwapResult[] = ranked.slice(
         0,
@@ -198,101 +210,96 @@ async function main() {
         priceImpact = actualPrice / referencePrice - 1;
       }
 
-      const profitable = best.minAmtOut.gte(best.maxAmtIn);
-
       console.log(
         new Date(),
         MINT,
-        profitable,
         best.label,
         best.minAmtOut.toString()
       );
 
-      if (profitable) {
-        /*
-        // Use the arb protection function on raven.
-        const program = new Program(
-          ravenIdl as Idl,
-          RAVEN_PROGRAM_ADDRESS,
-          anchorProvider
+      /*
+      // Use the arb protection function on raven.
+      const program = new Program(
+        ravenIdl as Idl,
+        RAVEN_PROGRAM_ADDRESS,
+        anchorProvider
+      );
+      const [checkpoint, _unusedBump] =  web3.PublicKey.findProgramAddressSync(
+        [Buffer.from(utils.bytes.utf8.encode('checkpoint'))],
+        program.programId,
+      );
+      const checkpointIx: TransactionInstruction = await program.methods.updateCheckpoint().accounts({
+        payer: keyPair.publicKey,
+        checkpoint: checkpoint,
+      })
+      .remainingAccounts([
+        {
+          pubkey: await getAssociatedTokenAddress(inputMintPk, keyPair.publicKey),
+          isWritable: true,
+          isSigner: false,
+        } as AccountMeta,
+        {
+          pubkey: await getAssociatedTokenAddress(USDC_MINT, keyPair.publicKey),
+          isWritable: true,
+          isSigner: false,
+        } as AccountMeta,
+      ])
+      .instruction();
+      */
+
+      const messageV0 = new TransactionMessage({
+        payerKey: keyPair.publicKey,
+        recentBlockhash: latestBlockhash.blockhash,
+        instructions: [
+          ...instructions,
+          ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2 }),
+          //checkpointIx,
+        ],
+      }).compileToV0Message(group.addressLookupTablesList);
+
+      const transaction = new VersionedTransaction(messageV0);
+      transaction.sign([keyPair]);
+
+      const sig = await connection.sendTransaction(transaction, {
+        skipPreflight: true,
+      });
+      console.log(
+        "Sending trade",
+        "SwapMode:",
+        mode,
+        "label:",
+        best.label,
+        "maxIn:",
+        best.maxAmtIn.toString(),
+        "minOut:",
+        best.minAmtOut.toString(),
+        "intermediateAmounts",
+        best.intermediateAmounts.map((val: BN) => {
+          return val.toString();
+        }),
+        "sig",
+        sig
+      );
+
+      alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
+      const confirmationResult = await connection.confirmTransaction({
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        signature: sig,
+      });
+      if (confirmationResult.value.err) {
+        alertDiscord(
+          `😭  failed ${MINT} ${best.label} ${sig} ${JSON.stringify(
+            confirmationResult.value.err
+          )}`
         );
-        const [checkpoint, _unusedBump] =  web3.PublicKey.findProgramAddressSync(
-          [Buffer.from(utils.bytes.utf8.encode('checkpoint'))],
-          program.programId,
+        await sleep(60_000);
+      } else {
+        // TODO: Convert confirmationResult into a string
+        alertDiscord(
+          `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
         );
-        const checkpointIx: TransactionInstruction = await program.methods.updateCheckpoint().accounts({
-          payer: keyPair.publicKey,
-          checkpoint: checkpoint,
-        })
-        .remainingAccounts([
-          {
-            pubkey: await getAssociatedTokenAddress(inputMintPk, keyPair.publicKey),
-            isWritable: true,
-            isSigner: false,
-          } as AccountMeta,
-          {
-            pubkey: await getAssociatedTokenAddress(USDC_MINT, keyPair.publicKey),
-            isWritable: true,
-            isSigner: false,
-          } as AccountMeta,
-        ])
-        .instruction();
-        */
-
-        const messageV0 = new TransactionMessage({
-          payerKey: keyPair.publicKey,
-          recentBlockhash: latestBlockhash.blockhash,
-          instructions: [
-            ...instructions,
-            ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2 }),
-            //checkpointIx,
-          ],
-        }).compileToV0Message(group.addressLookupTablesList);
-
-        const transaction = new VersionedTransaction(messageV0);
-        transaction.sign([keyPair]);
-
-        const sig = await connection.sendTransaction(transaction, {
-          skipPreflight: true,
-        });
-        console.log(
-          "Sending trade",
-          "SwapMode:",
-          mode,
-          "label:",
-          best.label,
-          "maxIn:",
-          best.maxAmtIn.toString(),
-          "minOut:",
-          best.minAmtOut.toString(),
-          "intermediateAmounts",
-          best.intermediateAmounts.map((val: BN) => {
-            return val.toString();
-          }),
-          "sig",
-          sig
-        );
-
-        alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
-        const confirmationResult = await connection.confirmTransaction({
-          blockhash: latestBlockhash.blockhash,
-          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-          signature: sig,
-        });
-        if (confirmationResult.value.err) {
-          alertDiscord(
-            `😭  failed ${MINT} ${best.label} ${sig} ${JSON.stringify(
-              confirmationResult.value.err
-            )}`
-          );
-          await sleep(60_000);
-        } else {
-          // TODO: Convert confirmationResult into a string
-          alertDiscord(
-            `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
-          );
-        }
       }
     } catch (e: any) {
       console.error(e);
