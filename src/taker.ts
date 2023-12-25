@@ -161,23 +161,7 @@ async function main() {
         router.swap(
           inputMintPk,
           outputMintPk,
-          amount!.muln(64),
-          ZERO,
-          mode,
-          slippage
-        ),
-        router.swap(
-          inputMintPk,
-          outputMintPk,
           amount!.muln(16),
-          ZERO,
-          mode,
-          slippage
-        ),
-        router.swap(
-          inputMintPk,
-          outputMintPk,
-          amount!.muln(4),
           ZERO,
           mode,
           slippage
@@ -250,73 +234,72 @@ async function main() {
       .instruction();
       */
 
-      const messageV0 = new TransactionMessage({
-        payerKey: keyPair.publicKey,
-        recentBlockhash: latestBlockhash.blockhash,
-        instructions: [
-          ...instructions,
-          ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-          ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2 }),
-          //checkpointIx,
-        ],
-      }).compileToV0Message(group.addressLookupTablesList);
+        const messageV0 = new TransactionMessage({
+          payerKey: keyPair.publicKey,
+          recentBlockhash: latestBlockhash.blockhash,
+          instructions: [
+            ...instructions,
+            ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2 }),
+            //checkpointIx,
+          ],
+        }).compileToV0Message(group.addressLookupTablesList);
 
-      const transaction = new VersionedTransaction(messageV0);
-      transaction.sign([keyPair]);
+        const transaction = new VersionedTransaction(messageV0);
+        transaction.sign([keyPair]);
 
-      const sig = await connection.sendTransaction(transaction, {
-        skipPreflight: true,
-      });
-      console.log(
-        "Sending trade",
-        "SwapMode:",
-        mode,
-        "label:",
-        best.label,
-        "maxIn:",
-        best.maxAmtIn.toString(),
-        "minOut:",
-        best.minAmtOut.toString(),
-        "intermediateAmounts",
-        best.intermediateAmounts.map((val: BN) => {
-          return val.toString();
-        }),
-        "sig",
-        sig
-      );
-
-      alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
-      const confirmationResult = await connection.confirmTransaction({
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-        signature: sig,
-      });
-      if (confirmationResult.value.err) {
-        alertDiscord(
-          `😭  failed ${MINT} ${best.label} ${sig} ${JSON.stringify(
-            confirmationResult.value.err
-          )}`
+        const sig = await connection.sendTransaction(transaction, {
+          skipPreflight: true,
+        });
+        console.log(
+          "Sending trade",
+          "SwapMode:",
+          mode,
+          "label:",
+          best.label,
+          "maxIn:",
+          best.maxAmtIn.toString(),
+          "minOut:",
+          best.minAmtOut.toString(),
+          "intermediateAmounts",
+          best.intermediateAmounts.map((val: BN) => {
+            return val.toString();
+          }),
+          "sig",
+          sig
         );
-        await sleep(60_000);
-      } else {
-        // TODO: Convert confirmationResult into a string
-        alertDiscord(
-          `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
-        );
+
+        alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);
+        const confirmationResult = await connection.confirmTransaction({
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+          signature: sig,
+        });
+        if (confirmationResult.value.err) {
+          alertDiscord(
+            `😭  failed ${MINT} ${best.label} ${sig} ${JSON.stringify(
+              confirmationResult.value.err
+            )}`
+          );
+          await sleep(60_000);
+        } else {
+          // TODO: Convert confirmationResult into a string
+          alertDiscord(
+            `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
+          );
+        }
       }
+      await sleep(100);
+    } catch (e: any) {
+      console.error(e);
+      alertDiscord(
+        `☢️  error ${MINT} ${e.message} ${
+          e.stack
+        } ${e.toString()} ${JSON.stringify(e)}`
+      );
+      await sleep(60000);
     }
-  } catch (e: any) {
-    console.error(e);
-    alertDiscord(
-      `☢️  error ${MINT} ${e.message} ${
-        e.stack
-      } ${e.toString()} ${JSON.stringify(e)}`
-    );
-    await sleep(60000);
   }
-}
-
-  await sleep(100);
 }
 
 

@@ -1213,6 +1213,7 @@ export class Router {
       new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
       USDC_MINT
     );
+    /*
     await this.addRavenEdges(
       program,
       RAVEN_MANGO_ACCOUNT_OWNER,
@@ -1225,6 +1226,7 @@ export class Router {
       new PublicKey("ZScHuTtqZukUrtZS43teTKGs2VqkKL8k4QCouR2n6Uo"),
       USDC_MINT
     );
+   */
 
     await this.addRavenEdges(
       program,
