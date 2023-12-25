@@ -140,7 +140,7 @@ async function main() {
       const outputMint = MINT!;
       const outputMintPk = new PublicKey(outputMint);
       const mode = SwapMode.ExactIn;
-      const slippage = 0.00005;
+      const slippage = 0.00001;
       let referencePrice: number | undefined;
       let amount: BN | undefined;
       if (
@@ -245,7 +245,7 @@ async function main() {
           instructions: [
             ...instructions,
             ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1 }),
+            ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 2 }),
             //checkpointIx,
           ],
         }).compileToV0Message(group.addressLookupTablesList);
