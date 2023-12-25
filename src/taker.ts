@@ -91,6 +91,11 @@ async function main() {
   const group = await mangoClient.getGroup(groupPk);
   await group.reloadAll(mangoClient);
 
+  // Every 5m update the group in the background
+  setInterval(async function () {
+    await group.reloadAll(mangoClient);
+  }, 300_000);
+
   const banks = Array.from(group.banksMapByMint, ([, value]) => value);
   const coder = new BorshAccountsCoder(mangoClient.program.idl);
   const subs = banks.map(([bank]) =>
@@ -118,10 +123,13 @@ async function main() {
   // init router
   const router = new Router(anchorProvider, minTvl);
   await router.start();
-  let latestBlockhash: Readonly<{ blockhash: string; lastValidBlockHeight: number; }> = await connection.getLatestBlockhash("finalized");
+  let latestBlockhash: Readonly<{
+    blockhash: string;
+    lastValidBlockHeight: number;
+  }> = await connection.getLatestBlockhash("finalized");
 
   // Regularly update the latest blockhash in the background.
-  setInterval(async function(){
+  setInterval(async function () {
     latestBlockhash = await connection.getLatestBlockhash("finalized");
   }, 10_000);
 
@@ -162,7 +170,7 @@ async function main() {
 
       const filtered = results.filter((r) => r.ok && r.label.includes("rvn"));
       if (filtered.length == 0) {
-        console.log(new Date(), 'No raven routes found');
+        console.log(new Date(), "No raven routes found");
         await sleep(100);
         continue;
       }
@@ -178,7 +186,10 @@ async function main() {
         );
       }
 
-      const [best]: SwapResult[] = ranked.slice(0, Math.min(ranked.length, maxRoutes));
+      const [best]: SwapResult[] = ranked.slice(
+        0,
+        Math.min(ranked.length, maxRoutes)
+      );
       const instructions = await best.instructions(wallet.publicKey);
       let priceImpact: number | undefined = undefined;
       if (!!referencePrice) {
@@ -246,13 +257,21 @@ async function main() {
           skipPreflight: true,
         });
         console.log(
-          'Sending trade',
-          'SwapMode:', mode,
-          'label:', best.label,
-          'maxIn:', best.maxAmtIn.toString(),
-          'minOut:', best.minAmtOut.toString(),
-          'intermediateAmounts', best.intermediateAmounts.map((val: BN) => { return val.toString(); }),
-          'sig', sig
+          "Sending trade",
+          "SwapMode:",
+          mode,
+          "label:",
+          best.label,
+          "maxIn:",
+          best.maxAmtIn.toString(),
+          "minOut:",
+          best.minAmtOut.toString(),
+          "intermediateAmounts",
+          best.intermediateAmounts.map((val: BN) => {
+            return val.toString();
+          }),
+          "sig",
+          sig
         );
 
         alertDiscord(`🤞  arb ${MINT} ${best.label} ${sig}`);

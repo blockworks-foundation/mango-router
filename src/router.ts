@@ -682,7 +682,7 @@ export class Router {
         async (_acc) => {
           // We could parse the account, but it is easier to just reload the
           // group and read it off the market.
-          await group.reloadAll(client);
+          await group.reloadPerpMarkets(client);
           marketOi = market.openInterest;
         },
         "processed"
