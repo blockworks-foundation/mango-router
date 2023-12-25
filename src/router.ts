@@ -67,6 +67,8 @@ import {
   RAVEN_MANGO_ACCOUNT,
   RAVEN_BASE_FEE,
   RAVEN_POSITION_INCREASE_FEE,
+  RAVEN_LST_CONVERSION_RATES,
+  RAVEN_LST_FEE,
 } from "./constants";
 import { assert } from "console";
 
@@ -115,7 +117,12 @@ function mergeSwapResults(...hops: SwapResult[]) {
     minAmtOut: lastHop.minAmtOut,
     mints: [...firstHop.mints, ...lastHop.mints],
     ok: hops.reduce((p, c) => p && c.ok, true),
-    intermediateAmounts: [...firstHop.intermediateAmounts, firstHop.minAmtOut, lastHop.maxAmtIn, ...lastHop.intermediateAmounts],
+    intermediateAmounts: [
+      ...firstHop.intermediateAmounts,
+      firstHop.minAmtOut,
+      lastHop.maxAmtIn,
+      ...lastHop.intermediateAmounts,
+    ],
   };
 }
 
@@ -169,7 +176,10 @@ class WhirlpoolEdge implements Edge {
       const fetcher = this.client.getFetcher();
       const pool = await this.client.getPool(this.poolPk);
       const programId = this.client.getContext().program.programId;
-      const slippageLimit = Percentage.fromFraction(Math.round(slippage * 1e8), 1e8);
+      const slippageLimit = Percentage.fromFraction(
+        Math.round(slippage * 1e8),
+        1e8
+      );
       let quote: SwapQuote | undefined;
       let ok: boolean = false;
 
@@ -291,7 +301,7 @@ class RaydiumEdge implements Edge {
     );
     return [fwd, bwd];
   }
-  
+
   // The otherAmountThreshold is just for checking whether the SwapResult is ok.
   // It is not included as the threshold in the ix or SwapResult, that is based
   // on slippage.
@@ -326,7 +336,9 @@ class RaydiumEdge implements Edge {
         fee = amountOut.fee;
         maxAmtIn = amountOut.realAmountIn.amount;
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
-        minAmtOut = new BN(amountOut.minAmountOut.amount.toNumber() * (1 - slippage));
+        minAmtOut = new BN(
+          amountOut.minAmountOut.amount.toNumber() * (1 - slippage)
+        );
         remainingAccounts = amountOut.remainingAccounts;
       } else {
         let amountIn: ReturnTypeComputeAmountOutBaseOut = Clmm.computeAmountIn({
@@ -341,7 +353,9 @@ class RaydiumEdge implements Edge {
         });
         ok = otherAmountThreshold.gte(amountIn.amountIn.amount);
         fee = amountIn.fee;
-        maxAmtIn = new BN(amountIn.maxAmountIn.amount.toNumber() * (1 + slippage));
+        maxAmtIn = new BN(
+          amountIn.maxAmountIn.amount.toNumber() * (1 + slippage)
+        );
         feeRate = fee.toNumber() / maxAmtIn.toNumber();
         minAmtOut = amountIn.realAmountOut.amount;
         remainingAccounts = amountIn.remainingAccounts;
@@ -392,7 +406,7 @@ class RaydiumEdge implements Edge {
       return {
         ok: ok,
         instructions,
-        label: 'raydium:' + this.poolPk.toString(),
+        label: "raydium:" + this.poolPk.toString(),
         marketInfos: [
           {
             label: "Raydium",
@@ -614,6 +628,8 @@ export class Router {
 
     const baseBank = group.getFirstBankByMint(baseMint);
     const quoteBank = group.getFirstBankByMint(quoteMint);
+    const lstConversionRate =
+      RAVEN_LST_CONVERSION_RATES[baseMint.toBase58()] ?? 1.0;
 
     // setup subscription
 
@@ -659,7 +675,10 @@ export class Router {
       this.connection.onAccountChange(
         RAVEN_MANGO_ACCOUNT,
         async (acc) => {
-          const mangoAccount: MangoAccount = client.getMangoAccountFromAi(RAVEN_MANGO_ACCOUNT, acc);
+          const mangoAccount: MangoAccount = client.getMangoAccountFromAi(
+            RAVEN_MANGO_ACCOUNT,
+            acc
+          );
           await mangoAccount.reloadSerum3OpenOrders(client);
           ravenPositions = {
             perpBase: mangoAccount.perpPositionExistsForMarket(market)
@@ -715,7 +734,9 @@ export class Router {
           }
 
           if (mode === SwapMode.ExactIn) {
-            let amountInLots = amount
+            let amountInLots = new BN(
+              Math.floor((amount.toString() as any) * lstConversionRate)
+            )
               .divn(Math.pow(10, baseBank.mintDecimals - market.baseDecimals))
               .div(market.baseLotSize);
 
@@ -755,26 +776,31 @@ export class Router {
                 ravenPositions.perpBase.isNeg()
                   ? RAVEN_POSITION_INCREASE_FEE
                   : zero
-              );
+              )
+              .add(lstConversionRate == 1.0 ? zero : RAVEN_LST_FEE);
 
             const nativeQuote = new BN(
               nativeQuoteFromPerpTrade
                 .mul(I80F48.fromNumber(1).sub(feeRate))
-                .toBig()
-                .round(undefined, 0)
-                .toNumber()
+                .floor()
+                .toString()
             );
             const feeQuote = sumQuoteLots
               .mul(market.quoteLotSize)
               .sub(nativeQuote);
 
-            const passesOiCheck = Math.abs(ravenPositions.perpBase.toNumber()) < marketOi.toNumber() / 20 ||
-              !ravenPositions.perpBase.isNeg();
+            const passesOiCheck =
+              Math.abs(ravenPositions.perpBase.toNumber()) <
+                marketOi.toNumber() / 20 || !ravenPositions.perpBase.isNeg();
             const passesHealthRatioCheck =
               ravenPositions.healthRatio.toNumber() > 100 ||
               !ravenPositions.perpBase.isNeg();
 
-            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck && passesOiCheck) {
+            if (
+              nativeQuote.gte(otherAmountThreshold) &&
+              passesHealthRatioCheck &&
+              passesOiCheck
+            ) {
               return {
                 label: `rvn-${baseMintLabel}-${quoteMintLabel}`,
                 marketInfos: [
@@ -909,30 +935,31 @@ export class Router {
               }
             }
             const nativeMaxBase = sumMaxBase.mul(market.baseLotSize);
-            const maxBaseBorrowed = BN2I80(nativeMaxBase).sub(
-              ravenPositions.tokenBase.max(ZERO_I80F48())
-            );
+            const maxBaseBorrowed = BN2I80(nativeMaxBase)
+              .div(I80F48.fromNumber(lstConversionRate))
+              .sub(ravenPositions.tokenBase.max(ZERO_I80F48()));
 
             const zero = ZERO_I80F48();
             const feeRate = RAVEN_BASE_FEE.add(market.takerFee)
               .add(
                 maxBaseBorrowed.isNeg()
                   ? zero
-                  : maxBaseBorrowed.div(BN2I80(nativeMaxBase))
-                                   .mul(baseBank.loanOriginationFeeRate)
+                  : maxBaseBorrowed
+                      .div(BN2I80(nativeMaxBase))
+                      .mul(baseBank.loanOriginationFeeRate)
               )
               .add(
                 ravenPositions.perpBase.isNeg()
                   ? zero
                   : RAVEN_POSITION_INCREASE_FEE
-              );
+              )
+              .add(lstConversionRate == 1.0 ? zero : RAVEN_LST_FEE);
 
             const nativeQuote = new BN(
               BN2I80(amount)
                 .mul(I80F48.fromNumber(1).sub(feeRate))
-                .toBig()
-                .round(undefined, 0)
-                .toNumber()
+                .floor()
+                .toString()
             );
 
             let amountInLots = nativeQuote.div(market.quoteLotSize);
@@ -955,17 +982,31 @@ export class Router {
               if (diff.isZero()) break;
             }
 
-            const nativeBase = sumBase
-              .mul(market.baseLotSize)
-              .muln(Math.pow(10, baseBank.mintDecimals - market.baseDecimals));
+            const nativeBase = new BN(
+              BN2I80(
+                sumBase
+                  .mul(market.baseLotSize)
+                  .muln(
+                    Math.pow(10, baseBank.mintDecimals - market.baseDecimals)
+                  )
+              )
+                .div(I80F48.fromNumber(lstConversionRate))
+                .floor()
+                .toString()
+            );
 
             const passesHealthRatioCheck =
               ravenPositions.healthRatio.toNumber() > 100 ||
               ravenPositions.perpBase.isNeg();
-            const passesOiCheck = Math.abs(ravenPositions.perpBase.toNumber()) < marketOi.toNumber() / 20 ||
-              ravenPositions.perpBase.isNeg();
+            const passesOiCheck =
+              Math.abs(ravenPositions.perpBase.toNumber()) <
+                marketOi.toNumber() / 20 || ravenPositions.perpBase.isNeg();
 
-            if (nativeQuote.gte(otherAmountThreshold) && passesHealthRatioCheck && passesOiCheck) {
+            if (
+              nativeQuote.gte(otherAmountThreshold) &&
+              passesHealthRatioCheck &&
+              passesOiCheck
+            ) {
               return {
                 label: `rvn-${quoteMintLabel}-${baseMintLabel}`,
                 marketInfos: [
@@ -1105,6 +1146,18 @@ export class Router {
       client,
       group,
       mangoAccount!,
+      "BTC-PERP",
+      "wbtc",
+      "usdc",
+      new PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"),
+      USDC_MINT
+    );
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
       "SOL-PERP",
       "wsol",
       "usdc",
@@ -1117,10 +1170,59 @@ export class Router {
       client,
       group,
       mangoAccount!,
+      "SOL-PERP",
+      "bsol",
+      "usdc",
+      new PublicKey("bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"),
+      USDC_MINT
+    );
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
+      "SOL-PERP",
+      "msol",
+      "usdc",
+      new PublicKey("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
+      USDC_MINT
+    );
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
+      "SOL-PERP",
+      "jitosol",
+      "usdc",
+      new PublicKey("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"),
+      USDC_MINT
+    );
+
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
       "ETH-PERP",
       "eth",
       "usdc",
       new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
+      USDC_MINT
+    );
+    await this.addRavenEdges(
+      program,
+      RAVEN_MANGO_ACCOUNT_OWNER,
+      client,
+      group,
+      mangoAccount!,
+      "ETH-PERP",
+      "wsteth",
+      "usdc",
+      new PublicKey("ZScHuTtqZukUrtZS43teTKGs2VqkKL8k4QCouR2n6Uo"),
       USDC_MINT
     );
 
