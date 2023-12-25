@@ -261,7 +261,6 @@ async function main() {
             alertDiscord(
               `💸  confirmed ${MINT} ${best.label} ${status.signature} ${status.confirmationStatus}`
             );
-            await sleep(100);
         } catch (e: any) {
           alertDiscord(
             `😭  failed ${MINT} ${best.label} ${e.txid} ${e.message}`
@@ -269,6 +268,8 @@ async function main() {
           await sleep(60_000);
         }
       }
+      await sleep(100);
+
     } catch (e: any) {
       console.error(e);
       alertDiscord(
