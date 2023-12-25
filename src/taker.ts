@@ -4,6 +4,7 @@ import {
   MANGO_V4_MAIN_GROUP,
   getAssociatedTokenAddress,
   USDC_MINT,
+  ZERO_I80F48,
 } from "@blockworks-foundation/mango-v4";
 import { U64_MAX, ZERO } from "@orca-so/common-sdk";
 import {
@@ -187,7 +188,7 @@ async function main() {
       const profit = (r: SwapResult) => r.minAmtOut.sub(r.maxAmtIn);
       const filtered = results
         .flat()
-        .filter((r) => r.ok && r.label.includes("rvn") && profit(r).gte(ZERO));
+        .filter((r) => r.ok && r.label.includes("rvn"));
 
       if (filtered.length == 0) {
         console.log(new Date(), "No raven routes found");
@@ -214,9 +215,11 @@ async function main() {
         new Date(),
         MINT,
         best.label,
-        best.minAmtOut.toString()
+        best.minAmtOut.toString(),
+        profit(best).toString()
       );
 
+      if (profit(best).gte(ZERO)) {
       /*
       // Use the arb protection function on raven.
       const program = new Program(
@@ -301,19 +304,21 @@ async function main() {
           `💸  confirmed ${MINT} ${best.label} ${sig} ${confirmationResult}`
         );
       }
-    } catch (e: any) {
-      console.error(e);
-      alertDiscord(
-        `☢️  error ${MINT} ${e.message} ${
-          e.stack
-        } ${e.toString()} ${JSON.stringify(e)}`
-      );
-      await sleep(60000);
     }
-
-    await sleep(100);
+  } catch (e: any) {
+    console.error(e);
+    alertDiscord(
+      `☢️  error ${MINT} ${e.message} ${
+        e.stack
+      } ${e.toString()} ${JSON.stringify(e)}`
+    );
+    await sleep(60000);
   }
 }
+
+  await sleep(100);
+}
+
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
