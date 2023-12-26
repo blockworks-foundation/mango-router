@@ -146,7 +146,7 @@ async function main() {
   const outputMint = MINT!;
   const outputMintPk = new PublicKey(outputMint);
   const mode = SwapMode.ExactIn;
-  const prioritizationFee = PRIORITY_FEE || 1;
+  const prioritizationFee = PRIORITY_FEE || 2;
   const slippage = 0.00001;
 
   while (true) {
