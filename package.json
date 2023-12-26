@@ -7,13 +7,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "taker": "ts-node src/taker.ts",
-    "sol": "source env.sh && source sol.sh && forever start -c yarn taker",
-    "msol": "source env.sh && source msol.sh && forever start -c yarn taker",
-    "bsol": "source env.sh && source bsol.sh && forever start -c yarn taker",
-    "jitosol": "source env.sh && source jitosol.sh && forever start -c yarn taker",
-    "wbtc": "source env.sh && source wbtc.sh && forever start -c yarn taker",
-    "tbtc": "source env.sh && source tbtc.sh && forever start -c yarn taker",
-    "rndr": "source env.sh && source rndr.sh && forever start -c yarn taker"
+    "sol": "source env.sh && source env/sol.sh && yarn taker",
+    "msol": "source env.sh && source env/msol.sh && yarn taker",
+    "bsol": "source env.sh && source env/bsol.sh && yarn taker",
+    "jitosol": "source env.sh && source env/jitosol.sh && yarn taker",
+    "wbtc": "source env.sh && source env/wbtc.sh && yarn taker",
+    "tbtc": "source env.sh && source env/tbtc.sh && yarn taker",
+    "rndr": "source env.sh && source env/rndr.sh && yarn taker"
   },
   "devDependencies": {
     "@types/cors": "^2.8.13",
