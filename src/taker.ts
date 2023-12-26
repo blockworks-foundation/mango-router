@@ -44,6 +44,7 @@ const {
   RPC_BACKUP_URLS,
   KEYPAIR,
   MINT,
+  PRIORITY_FEE,
   SIZE,
   SIZES,
   DISCORD_WEBHOOK_URL,
@@ -140,14 +141,17 @@ async function main() {
     latestBlockhash = await connection.getLatestBlockhash("finalized");
   }, 10_000);
 
+  const inputMint = MINT!;
+  const inputMintPk = new PublicKey(inputMint);
+  const outputMint = MINT!;
+  const outputMintPk = new PublicKey(outputMint);
+  const mode = SwapMode.ExactIn;
+  const prioritizationFee = PRIORITY_FEE || 1;
+  const slippage = 0.00001;
+
   while (true) {
     try {
-      const inputMint = MINT!;
-      const inputMintPk = new PublicKey(inputMint);
-      const outputMint = MINT!;
-      const outputMintPk = new PublicKey(outputMint);
-      const mode = SwapMode.ExactIn;
-      const slippage = 0.00001;
+
       let referencePrice: number | undefined;
       let amounts: BN[] | undefined;
       if (
@@ -257,7 +261,7 @@ async function main() {
           const status = await mangoClient.sendAndConfirmTransactionForGroup(
             group,
             [...instructions, ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT })],
-            { latestBlockhash, postSendTxCallback, prioritizationFee: 2 });
+            { latestBlockhash, postSendTxCallback, prioritizationFee });
             alertDiscord(
               `💸  confirmed ${MINT} ${best.label} ${status.signature} ${status.confirmationStatus}`
             );

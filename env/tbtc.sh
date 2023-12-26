@@ -1,0 +1,2 @@
+export MINT="6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU"
+export SIZES="0.0002,0.001,0.004"

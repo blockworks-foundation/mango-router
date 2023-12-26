@@ -1,0 +1,3 @@
+export MINT="J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
+export SIZES="0.927643785"
+export RAVEN_MANGO_ACCOUNT="7KwNpAmPjHExeau2YSZyb67wmQgeZPtMDGQy98AswttJ"
