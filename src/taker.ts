@@ -100,11 +100,7 @@ async function main() {
 
   // Every 5m update the group in the background
   setInterval(async function () {
-    try {
-      await group.reloadAll(mangoClient);
-    } catch (e) {
-      console.error(new Date(), 'group.reloadAll error', e);
-    }
+    await group.reloadAll(mangoClient);
   }, 300_000);
 
   const banks = Array.from(group.banksMapByMint, ([, value]) => value);
@@ -141,11 +137,7 @@ async function main() {
 
   // Regularly update the latest blockhash in the background.
   setInterval(async function () {
-    try {
-      latestBlockhash = await connection.getLatestBlockhash("finalized");
-    } catch (e) {
-      console.error(new Date(), 'latestBlockhash error', e);
-    }
+    latestBlockhash = await connection.getLatestBlockhash("finalized");
   }, 10_000);
 
   while (true) {
