@@ -47,6 +47,7 @@ const {
   PRIORITY_FEE,
   SIZE,
   SIZES,
+  SLIPPAGE,
   DISCORD_WEBHOOK_URL,
 } = process.env;
 
@@ -147,7 +148,7 @@ async function main() {
   const outputMintPk = new PublicKey(outputMint);
   const mode = SwapMode.ExactIn;
   const prioritizationFee = PRIORITY_FEE || 2;
-  const slippage = 0.00001;
+  const slippage = SLIPPAGE ? parseFloat(SLIPPAGE) : 0.00001;
 
   while (true) {
     try {
