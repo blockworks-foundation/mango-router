@@ -3,3 +3,4 @@ export SIZES="0.2,2"
 export RAVEN_MANGO_ACCOUNT="7KwNpAmPjHExeau2YSZyb67wmQgeZPtMDGQy98AswttJ"
 export PRIORITY_FEE=1001
 export SLIPPAGE=0.00003
+export NODE_OPTIONS='--max-old-space-size=8192'
