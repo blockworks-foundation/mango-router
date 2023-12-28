@@ -1574,7 +1574,8 @@ export class Router {
     amount: BN,
     otherAmountThreshold: BN,
     mode: SwapMode,
-    slippage: number
+    slippage: number,
+    whitelistedMints?: string[]
   ): Promise<SwapResult[]> {
     let results: SwapResult[] = [];
 
@@ -1599,6 +1600,7 @@ export class Router {
       const BtoZ = fromB?.get(Z);
 
       if (!BtoZ) continue;
+      if (whitelistedMints && !whitelistedMints.includes(B)) continue;
 
       if (mode === SwapMode.ExactIn) {
         // swap A->B->Z amt=IN oth=OUT

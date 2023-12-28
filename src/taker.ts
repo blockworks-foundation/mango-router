@@ -169,7 +169,7 @@ async function main() {
         amounts = sizes.map(s => new BN(parseFloat(s) * 10 ** inputBank.mintDecimals));
       }
       const results: SwapResult[][] = await Promise.all(amounts!.map(amount => 
-        router.swap(inputMintPk, outputMintPk, amount, ZERO, mode, slippage)
+        router.swap(inputMintPk, outputMintPk, amount, ZERO, mode, slippage, ['EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'])
       ));
 
       const profit = (r: SwapResult) => r.minAmtOut.sub(r.maxAmtIn);
