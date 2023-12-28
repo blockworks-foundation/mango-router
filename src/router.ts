@@ -1596,11 +1596,12 @@ export class Router {
     }
 
     for (const [B, AtoB] of fromA.entries()) {
+      if (whitelistedMints && !whitelistedMints.includes(B)) continue;
+
       const fromB = this.routes.get(B);
       const BtoZ = fromB?.get(Z);
 
       if (!BtoZ) continue;
-      if (whitelistedMints && !whitelistedMints.includes(B)) continue;
 
       if (mode === SwapMode.ExactIn) {
         // swap A->B->Z amt=IN oth=OUT
