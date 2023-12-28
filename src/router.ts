@@ -477,13 +477,12 @@ export class Router {
     this.subscriptions = [];
   }
 
-  public async start(): Promise<void> {
+  public async start(whitelistedMints?: string[]): Promise<void> {
     this.routes = new Map();
     this.subscriptions = [];
 
     await this.indexRaven();
-
-    await this.indexWhirpools();
+    await this.indexWhirpools(whitelistedMints);
 
     // setup a websocket connection to refresh all whirpool program accounts
     const idl = this.whirlpoolClient.getContext().program.idl;
@@ -497,6 +496,8 @@ export class Router {
         ORCA_WHIRLPOOL_PROGRAM_ID,
         (p) => {
           const key = p.accountId.toBase58();
+          if (!(key in this.whirlpoolClient.getFetcher()["_cache"])) return;
+
           const accountData = p.accountInfo.data;
           const value = whirlpoolCoder.decodeAny(accountData);
           this.whirlpoolClient.getFetcher()["_cache"][key] = {
@@ -515,7 +516,7 @@ export class Router {
         ]
       );
 
-    await this.indexRaydium();
+    await this.indexRaydium(whitelistedMints);
 
     // Only the poolInfo is worth updating. tickArray and mintInfos should not change.
     const poolInfoDiscriminator = Buffer.from(
@@ -525,13 +526,12 @@ export class Router {
       MAINNET_PROGRAM_ID.CLMM,
       (p) => {
         const key = p.accountId.toBase58();
-        const accountData = p.accountInfo.data;
-        const layoutAccountInfo = PoolInfoLayout.decode(accountData);
 
         // Cache only holds those filtered with enough TVL.
-        if (!(key in this.raydiumCache!.poolInfos)) {
-          return;
-        }
+        if (!(key in this.raydiumCache!.poolInfos)) return;
+
+        const accountData = p.accountInfo.data;
+        const layoutAccountInfo = PoolInfoLayout.decode(accountData);
 
         // Most of these fields dont matter, but update anyways.
         this.raydiumCache!.poolInfos[key] = {
@@ -1242,7 +1242,7 @@ export class Router {
     );
   }
 
-  async indexRaydium(): Promise<void> {
+  async indexRaydium(whitelistedMints?: string[]): Promise<void> {
     const response = await fetch("https://api.raydium.io/v2/ammV3/ammPools", {
       method: "GET",
     });
@@ -1250,6 +1250,8 @@ export class Router {
 
     // TODO: Do not trust the tvl and instead look it up like with jupiter prices
     const poolsFilteredByTvl = poolData.filter((p: ApiClmmPoolsItem) => {
+      if (whitelistedMints && !(whitelistedMints.includes(p.mintA) && whitelistedMints.includes(p.mintB)))
+        return false;
       return p.tvl > this.minTvl;
     });
     console.log(
@@ -1296,7 +1298,7 @@ export class Router {
     }
   }
 
-  async indexWhirpools(): Promise<void> {
+  async indexWhirpools(whitelistedMints?: string[]): Promise<void> {
     const poolsPks = (
       await this.whirlpoolClient.getContext().program.account.whirlpool.all()
     ).map((p) => p.publicKey);
@@ -1327,6 +1329,9 @@ export class Router {
     const filtered = pools.filter((p) => {
       const mintA = p.getTokenAInfo().mint.toString();
       const mintB = p.getTokenBInfo().mint.toString();
+      if (whitelistedMints && !(whitelistedMints?.includes(mintA) && whitelistedMints?.includes(mintB)))
+        return false;
+
       const priceA = prices[mintA];
       const priceB = prices[mintB];
 

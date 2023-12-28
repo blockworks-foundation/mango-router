@@ -131,7 +131,7 @@ async function main() {
 
   // init router
   const router = new Router(anchorProvider, minTvl);
-  await router.start();
+  await router.start([MINT!, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v']);
   let latestBlockhash: Readonly<{
     blockhash: string;
     lastValidBlockHeight: number;
