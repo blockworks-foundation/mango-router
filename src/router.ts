@@ -1098,12 +1098,9 @@ export class Router {
       RAVEN_PROGRAM_ADDRESS,
       userProvider
     );
-    const mangoAccount = await client.getMangoAccountForOwner(
-      group,
-      RAVEN_MANGO_ACCOUNT_OWNER,
-      0 /* First Mango account created */
+    const mangoAccount = await client.getMangoAccount(
+      RAVEN_MANGO_ACCOUNT, true
     );
-    await mangoAccount!.reload(client);
 
     await this.addRavenEdges(
       program,
