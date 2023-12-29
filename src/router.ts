@@ -598,6 +598,14 @@ export class Router {
     const lstConversionRate =
       RAVEN_LST_CONVERSION_RATES[baseMint.toBase58()] ?? 1.0;
 
+
+    let lastUpdate = Date.now();
+    setInterval(() => {
+      if (Date.now() - lastUpdate > 60_000) {
+        process.exit(-100);
+      }
+    }, 10_000);
+
     // setup subscription
 
     this.subscriptions.push(
@@ -609,6 +617,7 @@ export class Router {
             acc.data
           );
           booksides[0] = BookSide.from(client, market, BookSideType.bids, side);
+          lastUpdate = Date.now()
         },
         "processed"
       )
@@ -622,6 +631,7 @@ export class Router {
             acc.data
           );
           booksides[1] = BookSide.from(client, market, BookSideType.asks, side);
+          lastUpdate = Date.now()
         },
         "processed"
       )
