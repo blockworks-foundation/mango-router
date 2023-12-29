@@ -8,7 +8,6 @@ import {
   MANGO_V4_MAIN_GROUP,
   MangoAccount,
   MangoClient,
-  PerpMarket,
   USDC_MINT,
   ZERO_I80F48,
   getAssociatedTokenAddress,
@@ -38,7 +37,6 @@ import {
   Clmm,
   ClmmPoolInfo,
   ApiClmmPoolsItem,
-  MAINNET_PROGRAM_ID,
   PoolInfoLayout,
   ReturnTypeComputeAmountOut,
   ReturnTypeComputeAmountOutBaseOut,
@@ -48,6 +46,7 @@ import {
   SqrtPriceMath,
   TOKEN_PROGRAM_ID,
   fetchMultipleMintInfos,
+  TickArrayLayout,
 } from "@raydium-io/raydium-sdk";
 import {
   AccountMeta,
@@ -57,9 +56,7 @@ import {
   PublicKey,
   TransactionInstruction,
 } from "@solana/web3.js";
-import { sha256 } from "@noble/hashes/sha256";
 import BN from "bn.js";
-import bs58 from "bs58";
 import ravenIdl from "./idl/raven.json";
 import {
   RAVEN_MANGO_ACCOUNT_OWNER,
@@ -457,14 +454,9 @@ export class RaydiumCache {
 export class Router {
   minTvl: number;
   routes: Map<string, Map<string, Edge[]>>;
-
   whirlpoolClient: WhirlpoolClient;
-  whirlpoolSub?: number;
-
   connection: Connection;
-
   raydiumCache?: RaydiumCache;
-  raydiumPoolInfoSub?: number;
   subscriptions: number[];
 
   constructor(anchorProvider: AnchorProvider, minTvl: number) {
@@ -487,100 +479,75 @@ export class Router {
     // setup a websocket connection to refresh all whirpool program accounts
     const idl = this.whirlpoolClient.getContext().program.idl;
     const whirlpoolCoder = new BorshAccountsCoder(idl as Idl);
-    const whirlpoolInfoDiscriminator = Buffer.from(
-      sha256("account:Whirlpool")
-    ).slice(0, 8);
-    this.whirlpoolSub = this.whirlpoolClient
-      .getContext()
-      .connection.onProgramAccountChange(
-        ORCA_WHIRLPOOL_PROGRAM_ID,
-        (p) => {
-          const key = p.accountId.toBase58();
-          if (!(key in this.whirlpoolClient.getFetcher()["_cache"])) return;
 
-          const accountData = p.accountInfo.data;
-          const value = whirlpoolCoder.decodeAny(accountData);
-          this.whirlpoolClient.getFetcher()["_cache"][key] = {
-            entity: undefined,
-            value,
-          };
-        },
-        "processed",
-        [
-          {
-            memcmp: {
-              offset: 0,
-              bytes: bs58.encode(whirlpoolInfoDiscriminator),
-            },
-          },
-        ]
-      );
+    const orcaKeys = Object.keys(this.whirlpoolClient.getFetcher()["_cache"]);
+    const orcaSubs = orcaKeys.map(key => this.connection.onAccountChange(new PublicKey(key),(ai, ctx) => {
+      if (!ai.owner.equals(ORCA_WHIRLPOOL_PROGRAM_ID)) return;
+
+      const value = whirlpoolCoder.decodeAny(ai.data);
+      this.whirlpoolClient.getFetcher()["_cache"][key] = {
+        entity: undefined,
+        value,
+      };
+    }));
+
+    this.subscriptions.push(...orcaSubs);
 
     await this.indexRaydium(whitelistedMints);
 
-    // Only the poolInfo is worth updating. tickArray and mintInfos should not change.
-    const poolInfoDiscriminator = Buffer.from(
-      sha256("account:PoolState")
-    ).slice(0, 8);
-    this.raydiumPoolInfoSub = this.connection.onProgramAccountChange(
-      MAINNET_PROGRAM_ID.CLMM,
-      (p) => {
-        const key = p.accountId.toBase58();
+    const poolInfoKeys = Object.keys(this.raydiumCache!.poolInfos);
+    const poolInfoSubs = poolInfoKeys.map(key => this.connection.onAccountChange(new PublicKey(key),(ai, ctx) => {
+      const layoutAccountInfo = PoolInfoLayout.decode(ai.data);
 
-        // Cache only holds those filtered with enough TVL.
-        if (!(key in this.raydiumCache!.poolInfos)) return;
+      // Most of these fields dont matter, but update anyways.
+      this.raydiumCache!.poolInfos[key] = {
+        state: {
+          ...this.raydiumCache!.poolInfos[key].state,
+          observationId: layoutAccountInfo.observationId,
+          creator: layoutAccountInfo.creator,
+          version: 6,
+          tickSpacing: layoutAccountInfo.tickSpacing,
+          liquidity: layoutAccountInfo.liquidity,
+          sqrtPriceX64: layoutAccountInfo.sqrtPriceX64,
+          currentPrice: SqrtPriceMath.sqrtPriceX64ToPrice(
+            layoutAccountInfo.sqrtPriceX64,
+            layoutAccountInfo.mintDecimalsA,
+            layoutAccountInfo.mintDecimalsB
+          ),
+          tickCurrent: layoutAccountInfo.tickCurrent,
+          observationIndex: layoutAccountInfo.observationIndex,
+          observationUpdateDuration:
+            layoutAccountInfo.observationUpdateDuration,
+          feeGrowthGlobalX64A: layoutAccountInfo.feeGrowthGlobalX64A,
+          feeGrowthGlobalX64B: layoutAccountInfo.feeGrowthGlobalX64B,
+          protocolFeesTokenA: layoutAccountInfo.protocolFeesTokenA,
+          protocolFeesTokenB: layoutAccountInfo.protocolFeesTokenB,
+          swapInAmountTokenA: layoutAccountInfo.swapInAmountTokenA,
+          swapOutAmountTokenB: layoutAccountInfo.swapOutAmountTokenB,
+          swapInAmountTokenB: layoutAccountInfo.swapInAmountTokenB,
+          swapOutAmountTokenA: layoutAccountInfo.swapOutAmountTokenA,
+          tickArrayBitmap: layoutAccountInfo.tickArrayBitmap,
+          startTime: layoutAccountInfo.startTime.toNumber(),
+        },
+      };
+    }));
 
-        const accountData = p.accountInfo.data;
-        const layoutAccountInfo = PoolInfoLayout.decode(accountData);
+    this.subscriptions.push(...poolInfoSubs);
 
-        // Most of these fields dont matter, but update anyways.
-        this.raydiumCache!.poolInfos[key] = {
-          state: {
-            ...this.raydiumCache!.poolInfos[key].state,
-            observationId: layoutAccountInfo.observationId,
-            creator: layoutAccountInfo.creator,
-            version: 6,
-            tickSpacing: layoutAccountInfo.tickSpacing,
-            liquidity: layoutAccountInfo.liquidity,
-            sqrtPriceX64: layoutAccountInfo.sqrtPriceX64,
-            currentPrice: SqrtPriceMath.sqrtPriceX64ToPrice(
-              layoutAccountInfo.sqrtPriceX64,
-              layoutAccountInfo.mintDecimalsA,
-              layoutAccountInfo.mintDecimalsB
-            ),
-            tickCurrent: layoutAccountInfo.tickCurrent,
-            observationIndex: layoutAccountInfo.observationIndex,
-            observationUpdateDuration:
-              layoutAccountInfo.observationUpdateDuration,
-            feeGrowthGlobalX64A: layoutAccountInfo.feeGrowthGlobalX64A,
-            feeGrowthGlobalX64B: layoutAccountInfo.feeGrowthGlobalX64B,
-            protocolFeesTokenA: layoutAccountInfo.protocolFeesTokenA,
-            protocolFeesTokenB: layoutAccountInfo.protocolFeesTokenB,
-            swapInAmountTokenA: layoutAccountInfo.swapInAmountTokenA,
-            swapOutAmountTokenB: layoutAccountInfo.swapOutAmountTokenB,
-            swapInAmountTokenB: layoutAccountInfo.swapInAmountTokenB,
-            swapOutAmountTokenA: layoutAccountInfo.swapOutAmountTokenA,
-            tickArrayBitmap: layoutAccountInfo.tickArrayBitmap,
-            startTime: layoutAccountInfo.startTime.toNumber(),
-          },
-        };
-      },
-      "processed",
-      [{ memcmp: { offset: 0, bytes: bs58.encode(poolInfoDiscriminator) } }]
-    );
+    const tickArrayKeys = Object.values(this.raydiumCache!.tickArrayByPoolIds).flatMap(p => Object.values(p).map(p => p.address.toBase58()));
+    let tickArraySubs = tickArrayKeys.map(key => this.connection.onAccountChange(new PublicKey(key),(ai, ctx) => {
+      const tickArray = TickArrayLayout.decode(ai.data);
+      this.raydiumCache!.tickArrayByPoolIds[tickArray.poolId.toBase58()][tickArray.startTickIndex] = {
+        ...tickArray,
+        address: new PublicKey(key)
+      }
+    }));
+
+    this.subscriptions.push(...tickArraySubs);
+
   }
 
   public async stop(): Promise<void> {
-    if (this.whirlpoolSub) {
-      await this.whirlpoolClient
-        .getContext()
-        .connection.removeProgramAccountChangeListener(this.whirlpoolSub);
-    }
-    if (this.raydiumPoolInfoSub) {
-      await this.connection.removeProgramAccountChangeListener(
-        this.raydiumPoolInfoSub
-      );
-    }
     for (const sub of this.subscriptions) {
       await this.connection.removeAccountChangeListener(sub);
     }
@@ -1299,16 +1266,20 @@ export class Router {
   }
 
   async indexWhirpools(whitelistedMints?: string[]): Promise<void> {
-    const poolsPks = (
+    const allPools = (
       await this.whirlpoolClient.getContext().program.account.whirlpool.all()
-    ).map((p) => p.publicKey);
+    );
+
+
+
+    // );.map((p) => p.publicKey);
     // sucks to double fetch but I couldn't find another way to do this
-    const pools = await this.whirlpoolClient.getPools(poolsPks, true);
+    // const pools = await this.whirlpoolClient.getPools(poolsPks, true);
     const mints = Array.from(
       new Set(
-        pools.flatMap((p) => [
-          p.getTokenAInfo().mint.toString(),
-          p.getTokenBInfo().mint.toString(),
+        allPools.flatMap((p) => [
+          p.account.tokenMintA.toString(),
+          p.account.tokenMintB.toString(),
         ])
       )
     );
@@ -1326,11 +1297,19 @@ export class Router {
       }
     }
 
+    const poolsToFetch = allPools.filter(p => {
+      const mintA = p.account.tokenMintA.toString();
+      const mintB = p.account.tokenMintB.toString();
+      if (whitelistedMints && !(whitelistedMints?.includes(mintA) && whitelistedMints?.includes(mintB)))
+        return false;
+      return true;
+    });
+
+    const pools = await this.whirlpoolClient.getPools(poolsToFetch.map(p => p.publicKey), true);
+
     const filtered = pools.filter((p) => {
       const mintA = p.getTokenAInfo().mint.toString();
       const mintB = p.getTokenBInfo().mint.toString();
-      if (whitelistedMints && !(whitelistedMints?.includes(mintA) && whitelistedMints?.includes(mintB)))
-        return false;
 
       const priceA = prices[mintA];
       const priceB = prices[mintB];
@@ -1372,7 +1351,7 @@ export class Router {
 
     console.log(
       "found",
-      poolsPks.length,
+      allPools.length,
       "orca pools.",
       filtered.length,
       "of those with TVL >",
